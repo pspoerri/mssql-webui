@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 — 2026-09-04
 
 - Redesign: one token palette (petrol accent for selection, amber for pending changes, red for
   delete) with a dark theme following the OS; data in monospace with numbers right-aligned;
