@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.5.0 — 2026-09-04
 
 - Audit log on stdout: every login and logout (with why a session ended), every SQL
   connection opened and every statement, commit and rollback is written as one JSON line
