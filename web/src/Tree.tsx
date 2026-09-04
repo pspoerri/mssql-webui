@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, enc, type Selection, type ServerInfo, type TableInfo } from './api'
+import { Icon } from './icons'
 
 type DbInfo = { schemas: string[]; tables: TableInfo[] }
 type Props = { selected: Selection | null; onSelect: (s: Selection) => void }
@@ -77,24 +78,32 @@ export function Tree({ selected, onSelect }: Props) {
       <ul>
         {servers.map((s) => (
           <li key={s.name}>
-            <b>{s.name}</b>
-            <button type="button" className="refresh" title="Refresh" aria-label={`Refresh ${s.name}`} onClick={() => refresh(s.name)}>↻</button>
+            <div className="server">
+              <Icon name="server" />
+              <span className="label">{s.name}</span>
+              <button type="button" className="refresh" title="Refresh" aria-label={`Refresh ${s.name}`} onClick={() => refresh(s.name)}><Icon name="refresh" /></button>
+            </div>
             {s.error && <div className="error">{s.error}</div>}
             <ul>
               {s.databases.map(({ name: db, access }) => {
                 const info = open[`${s.name}/${db}`]
+                const busy = loading === `${s.name}/${db}`
                 return (
                   <li key={db}>
-                    <button type="button" onClick={() => toggle(s.name, db)} aria-busy={loading === `${s.name}/${db}`}
-                      className={access ? '' : 'noaccess'} aria-disabled={!access}
+                    <button type="button" onClick={() => toggle(s.name, db)} aria-busy={busy} aria-expanded={!!info}
+                      className={[info && 'open', !access && 'noaccess'].filter(Boolean).join(' ')} aria-disabled={!access}
                       title={access ? undefined : `You have no access to ${db}`}>
-                      {info ? '▾' : '▸'} {db}{loading === `${s.name}/${db}` && <span className="kind">loading…</span>}
+                      <Icon name="chevron" className="chev" /><Icon name="database" />
+                      <span className="label">{db}</span>
+                      {busy && <span className="kind">loading…</span>}
                     </button>
                     {info && (
                       <ul>
                         <li>
                           <button type="button" className={isSel(s.name, db, undefined, true) ? 'selected' : ''}
-                            onClick={() => onSelect({ srv: s.name, db, console: true })}>SQL console</button>
+                            onClick={() => onSelect({ srv: s.name, db, console: true })}>
+                            <Icon name="console" /><span className="label">SQL console</span>
+                          </button>
                         </li>
                         {info.schemas.map((schema) => (
                           <li key={schema}>
@@ -102,9 +111,9 @@ export function Tree({ selected, onSelect }: Props) {
                             <ul>
                               {info.tables.filter((t) => t.schema === schema).map((t) => (
                                 <li key={t.name}>
-                                  <button type="button" className={isSel(s.name, db, t) ? 'selected' : ''}
+                                  <button type="button" className={isSel(s.name, db, t) ? 'selected' : ''} title={t.kind === 'view' ? `${t.name} (view)` : t.name}
                                     onClick={() => onSelect({ srv: s.name, db, table: t })}>
-                                    {t.name}{t.kind === 'view' && <span className="kind">view</span>}
+                                    <Icon name={t.kind === 'view' ? 'view' : 'table'} /><span className="label">{t.name}</span>
                                   </button>
                                 </li>
                               ))}
@@ -113,7 +122,7 @@ export function Tree({ selected, onSelect }: Props) {
                         ))}
                         <li>
                           <button type="button" className="add"
-                            onClick={() => create(`/api/s/${enc(s.name)}/d/${enc(db)}/schemas`, 'schema', () => load(s.name, db))}>+ schema</button>
+                            onClick={() => create(`/api/s/${enc(s.name)}/d/${enc(db)}/schemas`, 'schema', () => load(s.name, db))}>+ New schema…</button>
                         </li>
                       </ul>
                     )}
@@ -122,7 +131,7 @@ export function Tree({ selected, onSelect }: Props) {
               })}
               <li>
                 <button type="button" className="add"
-                  onClick={() => create(`/api/s/${enc(s.name)}/databases`, 'database', loadServers)}>+ database</button>
+                  onClick={() => create(`/api/s/${enc(s.name)}/databases`, 'database', loadServers)}>+ New database…</button>
               </li>
             </ul>
           </li>

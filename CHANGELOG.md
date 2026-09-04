@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Redesign: one token palette (petrol accent for selection, amber for pending changes, red for
+  delete) with a dark theme following the OS; data in monospace with numbers right-aligned;
+  object icons in the tree (server, database, table, view, console) with indent guides;
+  breadcrumb and tab title follow the selection; keyboard keys, help sections, favicon.
+- Sidebar: drag its right edge to resize (double-click resets), header button hides it; both
+  remembered.
+- Pin icon in column headers: pinned columns move to the left edge in pin order and stay visible
+  while scrolling sideways. Key columns are pinned by default.
+- Columns open wide enough to show their loaded values in full (up to 120 characters).
+- Save button shows how many rows it will write; column tooltips name the primary key.
+
 ## v0.3.0 — 2026-09-04
 
 - Column header icons: sort ascending/descending/off, and a filter popover

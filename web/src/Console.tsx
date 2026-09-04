@@ -12,26 +12,27 @@ export function Console({ srv, db }: { srv: string; db: string }) {
       .catch((e) => setErr(e.message))
 
   return (
-    <div>
-      <div className="toolbar"><b>{db}</b> SQL console</div>
-      <textarea rows={8} value={sql} placeholder="SELECT TOP 100 * FROM ..."
-        aria-label="SQL"
+    <div className="console">
+      <textarea rows={8} value={sql} placeholder={`SELECT TOP 100 * FROM ...   (runs against ${db})`}
+        aria-label="SQL" spellCheck={false}
         onChange={(e) => setSql(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) run() }} />
-      <div className="toolbar"><button onClick={run}>Run</button><span className="note">Ctrl+Enter</span></div>
+      <div className="toolbar">
+        <button className="primary" disabled={!sql.trim()} onClick={run}>Run</button>
+        <span className="note"><kbd>Ctrl</kbd>+<kbd>Enter</kbd></span>
+        {result && <span className="count">{'rowsAffected' in result ? `${result.rowsAffected} row(s) affected` : `${result.rows.length} rows`}</span>}
+      </div>
       {err && <div className="error">{err}</div>}
-      {result && ('rowsAffected' in result ? (
-        <p>{result.rowsAffected} row(s) affected</p>
-      ) : (
+      {result && !('rowsAffected' in result) && (
         <table>
           <thead><tr>{result.columns.map((c, i) => <th key={i}>{c}</th>)}</tr></thead>
           <tbody>
             {result.rows.map((row, i) => (
-              <tr key={i}>{row.map((v, j) => <td key={j}>{v === null ? <span className="null">NULL</span> : String(v)}</td>)}</tr>
+              <tr key={i}>{row.map((v, j) => <td key={j} className={typeof v === 'number' ? 'num' : ''}>{v === null ? <span className="null">NULL</span> : String(v)}</td>)}</tr>
             ))}
           </tbody>
         </table>
-      ))}
+      )}
     </div>
   )
 }

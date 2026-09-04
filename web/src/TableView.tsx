@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api, cellToString, enc, type Cell, type RowsPage, type TableInfo, type TableMeta } from './api'
+import { Icon } from './icons'
 import { formatTerms, parseTerms, type Op } from './search'
 
 type Props = { srv: string; db: string; table: TableInfo; onDirty: (d: boolean) => void }
@@ -9,7 +10,9 @@ type Sort = { col: string; desc: boolean }
 type Filter = { col: string; op: Op; val: string } // the filter popover being edited
 
 const LIMIT = 100
-const ICONS = 40 // room for the sort/filter icons in a header
+const ICONS = 60 // room for the sort/filter/pin icons in a header
+const CTL = 32 // width of the delete-checkbox column
+const PAD = 18 // cell padding plus border, added to measured text widths
 
 export function TableView({ srv, db, table, onDirty }: Props) {
   const base = `/api/s/${enc(srv)}/d/${enc(db)}/t/${enc(table.schema)}/${enc(table.name)}`
@@ -34,6 +37,7 @@ export function TableView({ srv, db, table, onDirty }: Props) {
   const topRef = useRef<HTMLDivElement>(null)
   const [topH, setTopH] = useState(0) // height of the sticky toolbar block; the header sticks below it
   const [widths, setWidths] = useState<Record<string, number>>({})
+  const [pins, setPins] = useState<string[] | null>(null) // pinned columns in pin order; null = the key columns
   const drag = useRef<{ col: string; x: number; w: number } | null>(null)
   const width = (c: string) => widths[c] ?? 120
 
@@ -125,35 +129,36 @@ export function TableView({ srv, db, table, onDirty }: Props) {
     return () => io.disconnect()
   }, [page, loading, load])
 
-  // Column widths: auto-fit (capped) when a column first appears; drag the header edge to
+  // Column widths: fit the loaded content when a column first appears; drag the header edge to
   // resize, double-click it to fit the loaded content, double-click again to fit the label.
-  // ponytail: widths are per mount; persist them in localStorage if people ask.
+  // ponytail: widths and pins are per mount; persist them in localStorage if people ask.
   const fitWidth = (col: string, cap: number) => {
     if (!page || !tableRef.current) return 120
     const j = page.columns.indexOf(col)
     // Long values never widen a column past 120 chars; the full value is in the cell's tooltip.
     const texts = page.rows.map((r, i) => (edits[i]?.[col] ?? cellToString(r[j]) ?? 'NULL').slice(0, 120))
-    const w = Math.max(textWidth(tableRef.current, [col], true) + ICONS, textWidth(tableRef.current, texts, false))
-    return Math.min(cap, w) + 14
+    const w = Math.max(textWidth(tableRef.current.tHead!, [col], true) + ICONS, textWidth(tableRef.current, texts, false))
+    return Math.min(cap, w) + PAD
   }
   useLayoutEffect(() => {
     if (!page) return
     setWidths((w) => {
       const next = { ...w }
-      for (const c of page.columns) if (!(c in next)) next[c] = fitWidth(c, 300)
+      for (const c of page.columns) if (!(c in next)) next[c] = fitWidth(c, Infinity)
       return next
     })
   }, [page]) // eslint-disable-line react-hooks/exhaustive-deps
   const fit = (col: string) => {
     const content = fitWidth(col, Infinity)
-    const label = (tableRef.current ? textWidth(tableRef.current, [col], true) : 100) + ICONS + 14
+    const label = (tableRef.current ? textWidth(tableRef.current.tHead!, [col], true) : 100) + ICONS + PAD
     setWidths((w) => ({ ...w, [col]: w[col] === content ? label : content }))
   }
 
   const isTable = table.kind === 'table'
   const pk = meta?.pk ?? []
   const editable = isTable && pk.length > 0 // no PK: append-only
-  const dirty = Object.keys(edits).length > 0 || deleted.size > 0 || added.length > 0
+  const pending = new Set([...Object.keys(edits).map(Number), ...deleted]).size + added.length // rows touched
+  const dirty = pending > 0
   useEffect(() => {
     onDirty(dirty)
     return () => onDirty(false)
@@ -161,25 +166,32 @@ export function TableView({ srv, db, table, onDirty }: Props) {
   const colMeta = (name: string) => meta?.columns.find((c) => c.name === name)
   const typeLabel = (name: string) => {
     const c = colMeta(name)
-    return c ? [c.type, c.nullable ? 'null' : 'not null', c.identity && 'identity', c.readonly && 'read-only'].filter(Boolean).join(', ') : ''
+    return c ? [c.type, c.nullable ? 'null' : 'not null', pk.includes(name) && 'primary key', c.identity && 'identity', c.readonly && 'read-only'].filter(Boolean).join(', ') : ''
   }
+  const isNum = (name: string) => /int|decimal|numeric|money|float|real/i.test(colMeta(name)?.type ?? '')
   const isReadonly = (name: string) => !editable || (colMeta(name)?.readonly ?? true)
   const canInsert = (name: string) => isTable && !(colMeta(name)?.readonly ?? true)
   // ponytail: clearing a nullable cell means NULL, a non-nullable one means "".
   // Add an explicit NULL toggle if someone needs an empty string in a nullable column.
   const normalize = (name: string, v: string) => (v === '' && colMeta(name)?.nullable ? null : v)
 
-  // Key columns (and the delete checkbox) stay put while scrolling sideways.
+  // Pinned columns (the key columns until toggled) are shown first, in pin order, and stay put
+  // while scrolling sideways, as does the delete checkbox.
+  const pinList = pins ?? pk
+  const pinned = (col: string) => pinList.includes(col)
+  const cols = [...pinList.filter((c) => page?.columns.includes(c)), ...(page?.columns ?? []).filter((c) => !pinned(c))]
+  const togglePin = (col: string) => setPins(pinned(col) ? pinList.filter((c) => c !== col) : [...pinList, col])
   const stickyLeft = (col: string) => {
-    let x = isTable ? 28 : 0
-    for (const c of page?.columns ?? []) {
+    let x = isTable ? CTL : 0
+    for (const c of cols) {
       if (c === col) return x
-      if (pk.includes(c)) x += width(c)
+      if (pinned(c)) x += width(c)
     }
     return 0
   }
-  const cellClass = (col: string, changed: boolean) =>
-    [pk.includes(col) && 'sticky', changed && 'changed'].filter(Boolean).join(' ')
+  const cellClass = (col: string, changed: boolean, cell = false) =>
+    [pinned(col) && 'sticky', changed && 'changed', cell && isNum(col) && 'num'].filter(Boolean).join(' ')
+  const stickyStyle = (col: string) => (pinned(col) ? { left: stickyLeft(col) } : undefined)
 
   const idx = (c: string) => page?.columns.indexOf(c) ?? -1
   const cellValue = (f: Focus): string | null =>
@@ -273,34 +285,36 @@ export function TableView({ srv, db, table, onDirty }: Props) {
     }
   }
 
-  if (!page) return err ? <div className="error">{err}</div> : <p>Loading…</p>
+  if (!page) return err ? <div className="error">{err}</div> : <p className="note">Loading…</p>
 
   const focusValue = focus ? cellValue(focus) : null
   const focusMulti = !!focus && /char|text|xml/i.test(colMeta(focus.col)?.type ?? '') // only text types can hold line breaks
-  const focusKey = focus && (focus.added ? 'new row' : Object.entries(keyOf(page.rows[focus.i])).map(([k, v]) => `${k}=${v}`).join(' '))
+  const focusKey = focus && (focus.added ? 'new row' : Object.entries(keyOf(page.rows[focus.i])).map(([k, v]) => `${k}=${v}`).join(', '))
 
   return (
     <div className="grid">
       <div className="top" ref={topRef}>
         <div className="toolbar">
-          <b>{table.schema}.{table.name}</b>
           <form onSubmit={search}>
+            <Icon name="search" />
             <input type="search" value={draft} placeholder="Search: word, col=value, col^prefix, col~part" aria-label="Search"
               title="Words must all occur in one column; col=value matches one column exactly; quotes keep spaces together: name='User 1002'; all terms must match"
               onChange={(e) => setDraft(e.target.value)} />
           </form>
-          <span>{page.rows.length}{page.hasMore ? '+' : ''} rows</span>
-          <a href={`${base}/csv`} download={`${table.schema}.${table.name}.csv`}>Download CSV</a>
-          {isTable ? (
-            <>
-              <button onClick={() => setAdded([...added, {}])}>Add row</button>
-              <button disabled={!dirty} className={dirty ? 'unsaved' : ''} title={dirty ? 'Unsaved changes (Enter)' : ''} onClick={save}>Save</button>
-              <button disabled={!dirty} onClick={reset}>Discard</button>
-              {meta && !editable && <span className="note">No primary key: append-only</span>}
-            </>
-          ) : (
-            <span className="note">View: read-only</span>
-          )}
+          <span className="count">{page.rows.length}{page.hasMore ? '+' : ''} rows</span>
+          {isTable ? meta && !editable && <span className="tag">No primary key: append-only</span> : <span className="tag">View: read-only</span>}
+          <div className="actions">
+            <a className="btn" href={`${base}/csv`} download={`${table.schema}.${table.name}.csv`}>Download CSV</a>
+            {isTable && (
+              <>
+                <button onClick={() => setAdded([...added, {}])}>Add row</button>
+                <button disabled={!dirty} onClick={reset}>Discard</button>
+                <button disabled={!dirty} className={dirty ? 'unsaved' : ''} title={dirty ? 'Unsaved changes (Enter)' : ''} onClick={save}>
+                  {dirty ? `Save ${pending} ${pending === 1 ? 'row' : 'rows'}` : 'Save'}
+                </button>
+              </>
+            )}
+          </div>
         </div>
         {filter && (
           <form className="fieldbar" onSubmit={(e) => { e.preventDefault(); setColumnFilter(filter.col, filter.val ? filter : null) }}>
@@ -317,7 +331,7 @@ export function TableView({ srv, db, table, onDirty }: Props) {
         )}
         {focus && (
           <div className="fieldbar">
-            <label htmlFor="fieldbar">{focus.col} <span className="note">({focusKey}) · {typeLabel(focus.col)}</span></label>
+            <label htmlFor="fieldbar"><b>{focus.col}</b> <span className="note">{focusKey}</span> <span className="faint">{typeLabel(focus.col)}</span></label>
             {focusMulti ? (
               <textarea id="fieldbar" rows={2} value={focusValue ?? ''} placeholder={focusValue === null ? 'NULL' : ''}
                 onChange={(e) => setCell(focus, e.target.value)} onKeyDown={onKey(focus)} />
@@ -331,24 +345,28 @@ export function TableView({ srv, db, table, onDirty }: Props) {
         )}
       </div>
       {err && <div className="error">{err}</div>}
-      <table ref={tableRef} style={{ width: (isTable ? 28 : 0) + page.columns.reduce((n, c) => n + width(c), 0) }}>
+      <table ref={tableRef} style={{ width: (isTable ? CTL : 0) + page.columns.reduce((n, c) => n + width(c), 0) }}>
         <colgroup>
-          {isTable && <col style={{ width: 28 }} />}
-          {page.columns.map((c) => <col key={c} style={{ width: width(c) }} />)}
+          {isTable && <col style={{ width: CTL }} />}
+          {cols.map((c) => <col key={c} style={{ width: width(c) }} />)}
         </colgroup>
         <thead>
           <tr>
-            {isTable && <th className="sticky" style={{ top: topH, left: 0 }} />}
-            {page.columns.map((c) => (
+            {isTable && <th className="sticky ctl" style={{ top: topH, left: 0 }} title={editable ? 'Tick rows to delete' : undefined} />}
+            {cols.map((c) => (
               <th key={c} title={typeLabel(c)} className={cellClass(c, false)}
-                style={{ top: topH, left: pk.includes(c) ? stickyLeft(c) : undefined }}>
-                {c}
+                style={{ top: topH, ...stickyStyle(c) }}>
+                <div className="hd">
+                <span className="lbl">{c}</span>
                 <button type="button" className={`hb${sort.col === c ? ' on' : ''}`} onClick={() => toggleSort(c)}
                   title={sort.col === c ? (sort.desc ? 'Sorted descending; click to clear' : 'Sorted ascending; click for descending') : 'Sort'}
-                  aria-label={`Sort by ${c}`}>{sort.col === c ? (sort.desc ? '↓' : '↑') : '⇅'}</button>
+                  aria-label={`Sort by ${c}`}><Icon name={sort.col === c ? (sort.desc ? 'sortDesc' : 'sortAsc') : 'sortNone'} size={13} /></button>
                 <button type="button" className={`hb${filtered(c) ? ' on' : ''}`}
                   onClick={() => (filtered(c) ? setColumnFilter(c, null) : openFilter(c))}
-                  title={filtered(c) ? 'Filtered; click to remove' : 'Filter'} aria-label={`Filter ${c}`}>{filtered(c) ? '▼' : '▽'}</button>
+                  title={filtered(c) ? 'Filtered; click to remove' : 'Filter'} aria-label={`Filter ${c}`}><Icon name="filter" size={13} filled={filtered(c)} /></button>
+                <button type="button" className={`hb${pinned(c) ? ' on' : ''}`} onClick={() => togglePin(c)}
+                  title={pinned(c) ? 'Pinned; click to let it scroll' : 'Pin column while scrolling sideways'} aria-label={`Pin ${c}`} aria-pressed={pinned(c)}><Icon name="pin" size={13} filled={pinned(c)} /></button>
+                </div>
                 <div className="resizer" title="Drag to resize; double-click to fit content, again to fit label"
                   onPointerDown={(e) => {
                     e.preventDefault()
@@ -369,14 +387,14 @@ export function TableView({ srv, db, table, onDirty }: Props) {
           {page.rows.map((row, i) => (
             <tr key={i} className={deleted.has(i) ? 'deleted' : ''}>
               {isTable && (
-                <td className="sticky" style={{ left: 0 }}>{editable && <input type="checkbox" title="Delete" aria-label="Delete row" checked={deleted.has(i)} onChange={() => toggleDelete(i)} />}</td>
+                <td className="sticky ctl" style={{ left: 0 }}>{editable && <input type="checkbox" title="Delete" aria-label="Delete row" checked={deleted.has(i)} onChange={() => toggleDelete(i)} />}</td>
               )}
-              {row.map((v, j) => {
-                const col = page.columns[j]
+              {cols.map((col) => {
+                const v = row[idx(col)]
                 const changed = !!edits[i] && col in edits[i]
                 const val = changed ? edits[i][col] : cellToString(v)
                 return (
-                  <td key={col} className={cellClass(col, changed)} title={`${val ?? 'NULL'}\n${typeLabel(col)}`} style={pk.includes(col) ? { left: stickyLeft(col) } : undefined}>
+                  <td key={col} className={cellClass(col, changed, true)} title={`${val ?? 'NULL'}\n${typeLabel(col)}`} style={stickyStyle(col)}>
                     {isReadonly(col) ? (
                       v === null ? <span className="null">NULL</span> : String(v)
                     ) : (
@@ -393,9 +411,9 @@ export function TableView({ srv, db, table, onDirty }: Props) {
           ))}
           {added.map((row, i) => (
             <tr key={`new${i}`} className="new">
-              <td className="sticky" style={{ left: 0 }}><button title="Remove" aria-label="Remove new row" onClick={() => { setFocus(null); setAdded(added.filter((_, k) => k !== i)) }}>×</button></td>
-              {page.columns.map((col) => (
-                <td key={col} className={cellClass(col, false)} style={pk.includes(col) ? { left: stickyLeft(col) } : undefined}>
+              <td className="sticky ctl" style={{ left: 0 }}><button className="quiet" title="Remove" aria-label="Remove new row" onClick={() => { setFocus(null); setAdded(added.filter((_, k) => k !== i)) }}>×</button></td>
+              {cols.map((col) => (
+                <td key={col} className={cellClass(col, false, true)} style={stickyStyle(col)}>
                   {canInsert(col) && (
                     <input type="text" value={row[col] ?? ''} placeholder="NULL"
                       aria-label={col}
