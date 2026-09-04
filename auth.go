@@ -84,6 +84,21 @@ func parseIDToken(tok string) (claims, error) {
 	return c, json.Unmarshal(b, &c)
 }
 
+// dropSession removes id from sessions.m and closes any DB pools it held.
+func dropSession(id string) {
+	sessions.Lock()
+	s := sessions.m[id]
+	delete(sessions.m, id)
+	sessions.Unlock()
+	if s != nil {
+		s.mu.Lock()
+		for _, db := range s.dbs {
+			db.Close()
+		}
+		s.mu.Unlock()
+	}
+}
+
 func checkClaims(c claims, clientID, tenant, group string) error {
 	if c.Aud != clientID {
 		return errors.New("id_token audience mismatch")
@@ -149,6 +164,9 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "access denied: "+err.Error(), http.StatusForbidden)
 		return
 	}
+	if old, err := r.Cookie("sid"); err == nil {
+		dropSession(old.Value)
+	}
 	id := randomID()
 	sessions.Lock()
 	sessions.m[id] = &session{
@@ -165,17 +183,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie("sid"); err == nil {
-		sessions.Lock()
-		s := sessions.m[c.Value]
-		delete(sessions.m, c.Value)
-		sessions.Unlock()
-		if s != nil {
-			s.mu.Lock()
-			for _, db := range s.dbs {
-				db.Close()
-			}
-			s.mu.Unlock()
-		}
+		dropSession(c.Value)
 	}
 	setCookie(w, "sid", "", "/", -1)
 	w.WriteHeader(http.StatusNoContent)

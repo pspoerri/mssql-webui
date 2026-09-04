@@ -1,8 +1,11 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -36,5 +39,36 @@ func TestParseAndCheckClaims(t *testing.T) {
 	}
 	if _, err := parseIDToken("nope"); err == nil {
 		t.Fatal("malformed token accepted")
+	}
+}
+
+func TestHandleLogoutDropsSession(t *testing.T) {
+	sessions.Lock()
+	sessions.m["sid1"] = &session{Name: "Ann", Email: "ann@example.com", dbs: map[string]*sql.DB{}}
+	sessions.Unlock()
+
+	r := httptest.NewRequest("POST", "/auth/logout", nil)
+	r.AddCookie(&http.Cookie{Name: "sid", Value: "sid1"})
+	w := httptest.NewRecorder()
+	handleLogout(w, r)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNoContent)
+	}
+	sessions.Lock()
+	_, ok := sessions.m["sid1"]
+	sessions.Unlock()
+	if ok {
+		t.Fatal("session still present after logout")
+	}
+
+	r2 := httptest.NewRequest("GET", "/api/me", nil)
+	r2.AddCookie(&http.Cookie{Name: "sid", Value: "sid1"})
+	w2 := httptest.NewRecorder()
+	withSession(func(http.ResponseWriter, *http.Request, *session) {
+		t.Fatal("handler called for unknown sid")
+	})(w2, r2)
+	if w2.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", w2.Code, http.StatusUnauthorized)
 	}
 }
