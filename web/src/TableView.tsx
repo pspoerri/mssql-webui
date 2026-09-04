@@ -214,6 +214,7 @@ export function TableView({ srv, db, table, onDirty }: Props) {
   if (!page) return err ? <div className="error">{err}</div> : <p>Loading…</p>
 
   const focusValue = focus ? cellValue(focus) : null
+  const focusMulti = !!focus && /char|text|xml/i.test(colMeta(focus.col)?.type ?? '') // only text types can hold line breaks
   const focusKey = focus && (focus.added ? 'new row' : Object.entries(keyOf(page.rows[focus.i])).map(([k, v]) => `${k}=${v}`).join(' '))
 
   return (
@@ -222,8 +223,8 @@ export function TableView({ srv, db, table, onDirty }: Props) {
         <div className="toolbar">
           <b>{table.schema}.{table.name}</b>
           <form onSubmit={search}>
-            <input type="search" value={draft} placeholder="Search: word or col=value" aria-label="Search"
-              title="Words match any column; col=value matches one column exactly; all terms must match"
+            <input type="search" value={draft} placeholder="Search: word, col=value, 'two words'" aria-label="Search"
+              title="Words must all occur in one column; col=value matches one column exactly; quotes keep spaces together: name='User 1002'; all terms must match"
               onChange={(e) => setDraft(e.target.value)} />
           </form>
           <span>{page.rows.length}{page.hasMore ? '+' : ''} rows</span>
@@ -242,8 +243,13 @@ export function TableView({ srv, db, table, onDirty }: Props) {
         {focus && (
           <div className="fieldbar">
             <label htmlFor="fieldbar">{focus.col} <span className="note">({focusKey})</span></label>
-            <textarea id="fieldbar" rows={2} value={focusValue ?? ''} placeholder={focusValue === null ? 'NULL' : ''}
-              onChange={(e) => setCell(focus, e.target.value)} />
+            {focusMulti ? (
+              <textarea id="fieldbar" rows={2} value={focusValue ?? ''} placeholder={focusValue === null ? 'NULL' : ''}
+                onChange={(e) => setCell(focus, e.target.value)} />
+            ) : (
+              <input id="fieldbar" type="text" value={focusValue ?? ''} placeholder={focusValue === null ? 'NULL' : ''}
+                onChange={(e) => setCell(focus, e.target.value)} />
+            )}
           </div>
         )}
       </div>

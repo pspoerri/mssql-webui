@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	mssql "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
@@ -549,29 +550,83 @@ var searchableTypes = map[string]bool{
 	"DATE": true, "DATETIME": true, "DATETIME2": true, "SMALLDATETIME": true, "DATETIMEOFFSET": true, "TIME": true,
 }
 
-// searchWhere turns "alan id=3" into a WHERE clause: a bare word matches any
-// searchable column (LIKE %word%), col=value matches that column exactly;
-// terms are ANDed. Placeholders start at @p1.
-// ponytail: terms split on whitespace, so a value cannot contain spaces; add quoting if needed.
+// searchTerm is one term of a search: a bare word/phrase, or col=value when kv is set.
+type searchTerm struct {
+	col, val string
+	kv       bool
+}
+
+// searchTerms splits q on whitespace; 'single' or "double" quotes keep spaces
+// (and '=') inside a term, so name='User 1002' and 'two words' both work.
+func searchTerms(q string) []searchTerm {
+	var out []searchTerm
+	var cur searchTerm
+	var buf strings.Builder
+	var quote rune
+	has := false
+	flush := func() {
+		if has {
+			cur.val = buf.String()
+			out = append(out, cur)
+		}
+		cur, has = searchTerm{}, false
+		buf.Reset()
+	}
+	for _, r := range q {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else {
+				buf.WriteRune(r)
+			}
+		case r == '\'' || r == '"':
+			quote, has = r, true
+		case unicode.IsSpace(r):
+			flush()
+		case r == '=' && !cur.kv && buf.Len() > 0:
+			cur.col, cur.kv = buf.String(), true
+			buf.Reset()
+		default:
+			buf.WriteRune(r)
+			has = true
+		}
+	}
+	flush()
+	return out
+}
+
+// searchWhere turns "User 1001 id=3" into a WHERE clause: bare words must all
+// occur in one searchable column (LIKE %word%), col=value matches that column
+// exactly; everything is ANDed. Placeholders start at @p1.
 func searchWhere(cols, types []string, q string) (string, []any, error) {
 	var conds []string
 	var args []any
-	for _, term := range strings.Fields(q) {
-		if col, val, ok := strings.Cut(term, "="); ok && col != "" {
-			i := slices.IndexFunc(cols, func(c string) bool { return strings.EqualFold(c, col) })
+	var words []int // placeholder numbers of the bare words
+	for _, term := range searchTerms(q) {
+		if term.kv {
+			i := slices.IndexFunc(cols, func(c string) bool { return strings.EqualFold(c, term.col) })
 			if i < 0 {
-				return "", nil, fmt.Errorf("unknown column %q", col)
+				return "", nil, fmt.Errorf("unknown column %q", term.col)
 			}
-			args = append(args, val)
+			args = append(args, term.val)
 			conds = append(conds, fmt.Sprintf("%s = @p%d", quoteIdent(cols[i]), len(args)))
 			continue
 		}
+		args = append(args, "%"+likeEscape(term.val)+"%")
+		words = append(words, len(args))
+	}
+	if len(words) > 0 {
 		var ors []string
-		args = append(args, "%"+likeEscape(term)+"%")
 		for i, c := range cols {
-			if searchableTypes[types[i]] {
-				ors = append(ors, fmt.Sprintf("CAST(%s AS nvarchar(max)) LIKE @p%d ESCAPE '\\'", quoteIdent(c), len(args)))
+			if !searchableTypes[types[i]] {
+				continue
 			}
+			var ands []string
+			for _, n := range words {
+				ands = append(ands, fmt.Sprintf("CAST(%s AS nvarchar(max)) LIKE @p%d ESCAPE '\\'", quoteIdent(c), n))
+			}
+			ors = append(ors, "("+strings.Join(ands, " AND ")+")")
 		}
 		if len(ors) == 0 {
 			return "", nil, errors.New("no searchable columns; use col=value")

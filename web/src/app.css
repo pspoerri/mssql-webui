@@ -28,7 +28,7 @@ main > :not(.grid) { padding: 1rem; }
 .toolbar { display: flex; gap: .5rem; align-items: center; padding-bottom: .5rem; }
 .fieldbar { display: flex; gap: .5rem; align-items: flex-start; padding-bottom: .5rem; }
 .fieldbar label { padding-top: 2px; white-space: nowrap; }
-.fieldbar textarea { flex: 1; font: inherit; }
+.fieldbar textarea, .fieldbar input { flex: 1; font: inherit; }
 .toolbar .note { color: #666; }
 .toolbar button.unsaved { background: #2563eb; color: #fff; border-color: #1d4ed8; font-weight: bold; }
 table { border-collapse: collapse; font-size: 13px; table-layout: fixed; }

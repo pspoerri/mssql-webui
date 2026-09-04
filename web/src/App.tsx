@@ -78,7 +78,7 @@ function Help() {
       <h2>Help</h2>
       <ul>
         <li>Expand a database in the tree and pick a table; more rows load as you scroll.</li>
-        <li>Search filters rows: a bare word matches any column, <code>col=value</code> matches one column exactly, all terms must match.</li>
+        <li>Search filters rows: bare words must all occur in one column (<code>User 1001</code> finds that name), <code>col=value</code> matches one column exactly, quotes keep spaces together (<code>name='User 1002'</code>), all terms must match.</li>
         <li>Tables with a primary key are editable: change cells, tick rows to delete, or add rows.
           Nothing is written until you press <b>Save</b>, which applies all pending changes in one transaction.
           Leaving the table with unsaved changes asks for confirmation.</li>

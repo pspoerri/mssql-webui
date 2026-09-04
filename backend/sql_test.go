@@ -186,16 +186,33 @@ func TestFailStatusCodes(t *testing.T) {
 func TestSearchWhere(t *testing.T) {
 	cols := []string{"id", "name", "photo"}
 	types := []string{"INT", "NVARCHAR", "VARBINARY"}
+	like := func(col string, n int) string {
+		return "CAST([" + col + "] AS nvarchar(max)) LIKE @p" + string(rune('0'+n)) + " ESCAPE '\\'"
+	}
 	where, args, err := searchWhere(cols, types, "al%an ID=3")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ` WHERE (CAST([id] AS nvarchar(max)) LIKE @p1 ESCAPE '\' OR CAST([name] AS nvarchar(max)) LIKE @p1 ESCAPE '\') AND [id] = @p2`
+	want := " WHERE [id] = @p2 AND ((" + like("id", 1) + ") OR (" + like("name", 1) + "))"
 	if where != want {
 		t.Fatalf("got  %s\nwant %s", where, want)
 	}
 	if !reflect.DeepEqual(args, []any{`%al\%an%`, "3"}) {
 		t.Fatalf("args %#v", args)
+	}
+	// Two bare words must occur in the same column.
+	where, _, _ = searchWhere(cols, types, "User 1001")
+	want = " WHERE ((" + like("id", 1) + " AND " + like("id", 2) + ") OR (" + like("name", 1) + " AND " + like("name", 2) + "))"
+	if where != want {
+		t.Fatalf("two words:\ngot  %s\nwant %s", where, want)
+	}
+	// Quotes keep spaces (and =) together; an empty value is allowed.
+	where, args, err = searchWhere(cols, types, `name='User 1002' "two words" 'a=b' id=`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(args, []any{"User 1002", "%two words%", "%a=b%", ""}) || !strings.HasPrefix(where, " WHERE [name] = @p1 AND [id] = @p4 AND (") {
+		t.Fatalf("quoted: %s %#v", where, args)
 	}
 	if where, args, err := searchWhere(cols, types, "  "); where != "" || args != nil || err != nil {
 		t.Fatalf("blank: %q %v %v", where, args, err)
