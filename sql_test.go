@@ -2,8 +2,14 @@ package main
 
 import (
 	"database/sql"
+	"errors"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
+
+	mssql "github.com/microsoft/go-mssqldb"
+	"golang.org/x/oauth2"
 )
 
 func TestQuoteIdent(t *testing.T) {
@@ -22,10 +28,10 @@ func TestBuildBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []stmt{
-		{SQL: "INSERT INTO [dbo].[t] ([a], [b]) VALUES (@p1, @p2)", Args: []any{"1", "2"}},
-		{SQL: "INSERT INTO [dbo].[t] DEFAULT VALUES"},
-		{SQL: "UPDATE [dbo].[t] SET [name] = @p1 WHERE [id] = @p2", Args: []any{"x", "7"}},
-		{SQL: "DELETE FROM [dbo].[t] WHERE [id] = @p1", Args: []any{"9"}},
+		{SQL: "INSERT INTO [dbo].[t] ([a], [b]) VALUES (@p1, @p2)", Args: []any{"1", "2"}, Kind: "insert"},
+		{SQL: "INSERT INTO [dbo].[t] DEFAULT VALUES", Kind: "insert"},
+		{SQL: "UPDATE [dbo].[t] SET [name] = @p1 WHERE [id] = @p2", Args: []any{"x", "7"}, Kind: "update"},
+		{SQL: "DELETE FROM [dbo].[t] WHERE [id] = @p1", Args: []any{"9"}, Kind: "delete"},
 	}
 	if !reflect.DeepEqual(stmts, want) {
 		t.Fatalf("got %#v\nwant %#v", stmts, want)
@@ -54,6 +60,9 @@ func TestParseServers(t *testing.T) {
 	}
 	if _, _, err := parseServers(""); err == nil {
 		t.Fatal("empty list accepted")
+	}
+	if _, _, err := parseServers("sqlserver://a.internal:1433,sqlserver://a.internal:1433"); err == nil {
+		t.Fatal("duplicate host accepted")
 	}
 }
 
@@ -96,7 +105,34 @@ func TestDevModeDBIsCachedWithoutTokenSource(t *testing.T) {
 	if err != nil || db == nil {
 		t.Fatalf("db: %v", err)
 	}
+	defer db.Close()
 	if s.dbs["localhost/master"] != db {
 		t.Fatal("pool not cached")
+	}
+}
+
+func TestFailStatusCodes(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantBody   string
+	}{
+		{"not found", errNotFound, 404, ""},
+		{"sql error", mssql.Error{Message: "boom"}, 400, "boom"},
+		{"token expired", &oauth2.RetrieveError{}, 401, ""},
+		{"other", errors.New("x"), 500, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			fail(rec, c.err)
+			if rec.Code != c.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, c.wantStatus)
+			}
+			if c.wantBody != "" && !strings.Contains(rec.Body.String(), c.wantBody) {
+				t.Fatalf("body %q does not contain %q", rec.Body.String(), c.wantBody)
+			}
+		})
 	}
 }

@@ -40,6 +40,7 @@ type batch struct {
 type stmt struct {
 	SQL  string
 	Args []any
+	Kind string // "insert", "update", or "delete"
 }
 
 func sortedKeys(m map[string]any) []string {
@@ -70,7 +71,7 @@ func buildBatch(schema, table string, b batch) ([]stmt, error) {
 	for _, row := range b.Inserts {
 		cols := sortedKeys(row)
 		if len(cols) == 0 {
-			out = append(out, stmt{SQL: "INSERT INTO " + t + " DEFAULT VALUES"})
+			out = append(out, stmt{SQL: "INSERT INTO " + t + " DEFAULT VALUES", Kind: "insert"})
 			continue
 		}
 		var names, marks []string
@@ -83,6 +84,7 @@ func buildBatch(schema, table string, b batch) ([]stmt, error) {
 		out = append(out, stmt{
 			SQL:  "INSERT INTO " + t + " (" + strings.Join(names, ", ") + ") VALUES (" + strings.Join(marks, ", ") + ")",
 			Args: args,
+			Kind: "insert",
 		})
 	}
 	for _, u := range b.Updates {
@@ -99,14 +101,14 @@ func buildBatch(schema, table string, b batch) ([]stmt, error) {
 			sets = append(sets, fmt.Sprintf("%s = @p%d", quoteIdent(c), len(args)))
 		}
 		where, args := whereClause(u.Key, args)
-		out = append(out, stmt{SQL: "UPDATE " + t + " SET " + strings.Join(sets, ", ") + " WHERE " + where, Args: args})
+		out = append(out, stmt{SQL: "UPDATE " + t + " SET " + strings.Join(sets, ", ") + " WHERE " + where, Args: args, Kind: "update"})
 	}
 	for _, key := range b.Deletes {
 		if len(key) == 0 {
 			return nil, errors.New("delete without key")
 		}
 		where, args := whereClause(key, nil)
-		out = append(out, stmt{SQL: "DELETE FROM " + t + " WHERE " + where, Args: args})
+		out = append(out, stmt{SQL: "DELETE FROM " + t + " WHERE " + where, Args: args, Kind: "delete"})
 	}
 	return out, nil
 }
@@ -138,6 +140,9 @@ func parseServers(list string) (map[string]msdsn.Config, []string, error) {
 		cfg, err := msdsn.Parse(u)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", u, err)
+		}
+		if _, ok := m[cfg.Host]; ok {
+			return nil, nil, fmt.Errorf("duplicate server host %q", cfg.Host)
 		}
 		m[cfg.Host] = cfg
 		names = append(names, cfg.Host)
@@ -181,6 +186,9 @@ func (s *session) db(srv, dbName string) (*sql.DB, error) {
 	}
 	d := sql.OpenDB(conn)
 	d.SetMaxOpenConns(3)
+	// ponytail: idle connections close after 5 min; the sql.DB handle and the
+	// session live until logout or restart. Add a session sweeper if
+	// abandoned sessions matter.
 	d.SetConnMaxIdleTime(5 * time.Minute)
 	s.dbs[key] = d
 	return d, nil
@@ -445,8 +453,11 @@ func handleRows(w http.ResponseWriter, r *http.Request, s *session) {
 	if offset < 0 {
 		offset = 0
 	}
-	if limit <= 0 || limit > 500 {
+	if limit <= 0 {
 		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
 	}
 	pk, err := primaryKey(r.Context(), db, obj)
 	if err != nil {
@@ -506,10 +517,18 @@ func handleBatch(w http.ResponseWriter, r *http.Request, s *session) {
 		return
 	}
 	for _, st := range stmts {
-		if _, err := tx.ExecContext(r.Context(), st.SQL, st.Args...); err != nil {
+		res, err := tx.ExecContext(r.Context(), st.SQL, st.Args...)
+		if err != nil {
 			tx.Rollback()
 			fail(w, err)
 			return
+		}
+		if st.Kind == "update" || st.Kind == "delete" {
+			if n, err := res.RowsAffected(); err == nil && n == 0 {
+				tx.Rollback()
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no row matched the key; it may have been changed or deleted"})
+				return
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {

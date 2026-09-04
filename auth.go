@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/microsoft"
@@ -32,6 +33,9 @@ var devSession *session
 
 func initAuth() {
 	if u := os.Getenv("DEV_USER"); u != "" {
+		if os.Getenv("CLIENT_SECRET") != "" || os.Getenv("TENANT_ID") != "" {
+			log.Fatal("DEV_USER cannot be combined with Entra configuration (TENANT_ID/CLIENT_SECRET); choose one")
+		}
 		log.Printf("DEV_USER=%s: Entra login disabled, using SQL logins from SQL_SERVERS", u)
 		devSession = &session{Name: u, Email: u, dbs: map[string]*sql.DB{}}
 		return
@@ -147,7 +151,7 @@ func setCookie(w http.ResponseWriter, name, value, path string, maxAge int) {
 func handleLogin(w http.ResponseWriter, r *http.Request) {
 	state := randomID()
 	setCookie(w, "oauth_state", state, "/auth", 300)
-	http.Redirect(w, r, oauthCfg.AuthCodeURL(state), http.StatusFound)
+	http.Redirect(w, r, oauthCfg.AuthCodeURL(state, oauth2.SetAuthURLParam("prompt", "select_account")), http.StatusFound)
 }
 
 func handleCallback(w http.ResponseWriter, r *http.Request) {
@@ -182,11 +186,12 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		dropSession(old.Value)
 	}
 	id := randomID()
+	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Timeout: 15 * time.Second})
 	sessions.Lock()
 	sessions.m[id] = &session{
 		Name:  cl.Name,
 		Email: cl.Email,
-		ts:    oauthCfg.TokenSource(context.Background(), tok),
+		ts:    oauthCfg.TokenSource(ctx, tok),
 		dbs:   map[string]*sql.DB{},
 	}
 	sessions.Unlock()

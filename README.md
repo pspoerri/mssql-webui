@@ -30,11 +30,11 @@ an error and an empty list.
 
 | Env var | Meaning |
 |---|---|
-| `TENANT_ID` | Entra tenant ID |
+| `TENANT_ID` | Entra tenant ID (the directory GUID, not the domain name) |
 | `CLIENT_ID`, `CLIENT_SECRET` | from the app registration |
 | `REDIRECT_URL` | `https://<host>/auth/callback` |
 | `ALLOWED_GROUP_ID` | object ID of the Entra group allowed in |
-| `SQL_SERVERS` | comma-separated go-mssqldb URLs without credentials, e.g. `sqlserver://sql1.internal:1433?encrypt=true,sqlserver://sql2:1433?trustservercertificate=true` |
+| `SQL_SERVERS` | comma-separated go-mssqldb URLs — without credentials in Entra mode, with a SQL login in dev mode, e.g. `sqlserver://sql1.internal:1433?encrypt=true,sqlserver://sql2:1433?trustservercertificate=true` |
 | `LISTEN_ADDR` | default `:8080` |
 | `DEV_USER` | skip Entra; run as this user with SQL logins from `SQL_SERVERS`. Dev only. |
 
@@ -55,13 +55,15 @@ cd web && pnpm install && pnpm dev   # UI on :5173, proxies /api and /auth
 
 Set `DEV_USER` to skip Entra entirely. Every request runs as that name and
 servers are opened with the SQL login in their `SQL_SERVERS` URL. Anyone who
-can reach the port is that user, so never set it in production.
+can reach the port is that user, so never set it in production. It listens on
+localhost only by default, and it refuses to start if Entra variables
+(`TENANT_ID`/`CLIENT_SECRET`) are also set. Logout is a no-op in dev mode.
 
 ```bash
 docker run -d --name sql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD='Dev_Passw0rd' \
   -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
 DEV_USER=dev SQL_SERVERS='sqlserver://sa:Dev_Passw0rd@localhost:1433?trustservercertificate=true' go run .
-cd web && pnpm dev
+cd web && pnpm install && pnpm dev
 ```
 
 On Apple Silicon add `--platform linux/amd64` and enable Rosetta in Docker
