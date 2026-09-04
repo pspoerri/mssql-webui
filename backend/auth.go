@@ -53,16 +53,23 @@ func initAuth() {
 	secureCookies = strings.HasPrefix(oauthCfg.RedirectURL, "https://")
 }
 
+// sessionTTL caps how long a login, and therefore a leaked sid cookie, stays
+// usable. The refresh token would otherwise keep minting SQL tokens for up
+// to 90 days. Re-login also re-checks group membership at Entra.
+const sessionTTL = 12 * time.Hour
+
 type session struct {
-	Name  string
-	Email string
-	ts    oauth2.TokenSource
-	mu    sync.Mutex
-	dbs   map[string]*sql.DB // "server/database" -> pool, filled by sql.go
+	Name    string
+	Email   string
+	expires time.Time
+	ts      oauth2.TokenSource
+	mu      sync.Mutex
+	dbs     map[string]*sql.DB // "server/database" -> pool, filled by sql.go
 }
 
-// ponytail: in-memory sessions, single instance, live until logout or restart.
-// Swap the map for Redis if scaled out.
+// ponytail: in-memory sessions, single instance, live until logout, sessionTTL
+// or restart. Expired sessions are dropped on their next request; add a
+// sweeper if abandoned logins pile up. Swap the map for Redis if scaled out.
 var sessions = struct {
 	sync.Mutex
 	m map[string]*session
@@ -189,10 +196,11 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Timeout: 15 * time.Second})
 	sessions.Lock()
 	sessions.m[id] = &session{
-		Name:  cl.Name,
-		Email: cl.Email,
-		ts:    oauthCfg.TokenSource(ctx, tok),
-		dbs:   map[string]*sql.DB{},
+		Name:    cl.Name,
+		Email:   cl.Email,
+		expires: time.Now().Add(sessionTTL),
+		ts:      oauthCfg.TokenSource(ctx, tok),
+		dbs:     map[string]*sql.DB{},
 	}
 	sessions.Unlock()
 	setCookie(w, "sid", id, "/", 0)
@@ -222,6 +230,10 @@ func withSession(h func(http.ResponseWriter, *http.Request, *session)) http.Hand
 		sessions.Lock()
 		s := sessions.m[c.Value]
 		sessions.Unlock()
+		if s != nil && time.Now().After(s.expires) {
+			dropSession(c.Value)
+			s = nil
+		}
 		if s == nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "not logged in"})
 			return

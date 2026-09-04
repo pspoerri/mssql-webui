@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func fakeIDToken(payload map[string]any) string {
@@ -91,5 +92,29 @@ func TestNoSessionIs401(t *testing.T) {
 	h(rec, httptest.NewRequest("GET", "/api/me", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("code %d", rec.Code)
+	}
+}
+
+func TestExpiredSessionIs401(t *testing.T) {
+	sessions.Lock()
+	sessions.m["old"] = &session{expires: time.Now().Add(-time.Second), dbs: map[string]*sql.DB{}}
+	sessions.m["fresh"] = &session{expires: time.Now().Add(time.Hour), dbs: map[string]*sql.DB{}}
+	sessions.Unlock()
+	defer func() { sessions.Lock(); delete(sessions.m, "fresh"); sessions.Unlock() }()
+	h := withSession(func(w http.ResponseWriter, r *http.Request, s *session) { w.WriteHeader(http.StatusOK) })
+	for sid, want := range map[string]int{"old": http.StatusUnauthorized, "fresh": http.StatusOK} {
+		r := httptest.NewRequest("GET", "/api/me", nil)
+		r.AddCookie(&http.Cookie{Name: "sid", Value: sid})
+		rec := httptest.NewRecorder()
+		h(rec, r)
+		if rec.Code != want {
+			t.Fatalf("%s: code %d, want %d", sid, rec.Code, want)
+		}
+	}
+	sessions.Lock()
+	_, ok := sessions.m["old"]
+	sessions.Unlock()
+	if ok {
+		t.Fatal("expired session not dropped")
 	}
 }

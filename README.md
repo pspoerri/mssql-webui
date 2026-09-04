@@ -110,6 +110,6 @@ registry to pull from.
 
 ## Limits (by design, easy to add)
 
-Sessions live in memory (single instance). Edits are last-write-wins. Cell
+Sessions live in memory (single instance) and expire 12 hours after login. Edits are last-write-wins. Cell
 values are sent as strings and converted by SQL Server. Clearing a nullable
 cell writes NULL. The console returns only the first result set.
