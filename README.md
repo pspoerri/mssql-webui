@@ -41,15 +41,22 @@ an error and an empty list.
 The process needs TCP reachability to every server (peered VNet, private
 endpoint, or VPN).
 
+## Layout
+
+```
+backend/   Go module: server, auth, SQL API; embeds backend/dist
+web/       Vite + React UI; `pnpm build` writes to ../backend/dist
+Makefile   make help lists the targets
+```
+
 ## Run locally
 
 ```bash
-export TENANT_ID=... CLIENT_ID=... CLIENT_SECRET=... ALLOWED_GROUP_ID=... \
-  SQL_SERVERS='sqlserver://sql1.internal:1433?encrypt=true' \
-  REDIRECT_URL=http://localhost:5173/auth/callback
-go run .            # API on :8080
-cd web && pnpm install && pnpm dev   # UI on :5173, proxies /api and /auth
+cp .env.example .env   # fill in the values; make exports them
+make dev               # backend on :8080, Vite on :5173 (proxies /api and /auth)
 ```
+
+`make help` shows every target: `dev`, `build`, `test`, `docker`, `clean`.
 
 ## Dev mode (no Entra)
 
@@ -62,8 +69,8 @@ localhost only by default, and it refuses to start if Entra variables
 ```bash
 docker run -d --name sql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD='Dev_Passw0rd' \
   -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
-DEV_USER=dev SQL_SERVERS='sqlserver://sa:Dev_Passw0rd@localhost:1433?trustservercertificate=true' go run .
-cd web && pnpm install && pnpm dev
+# in .env: DEV_USER=dev and SQL_SERVERS='sqlserver://sa:Dev_Passw0rd@localhost:1433?trustservercertificate=true'
+make dev
 ```
 
 On Apple Silicon add `--platform linux/amd64` and enable Rosetta in Docker
@@ -72,14 +79,14 @@ Desktop. The Entra token path is the one thing dev mode does not exercise.
 ## Build
 
 ```bash
-cd web && pnpm install && pnpm build && cd ..
-go build -o db-webui .
+make test    # go vet, go test, tsc
+make build   # ./db-webui with the UI embedded
 ```
 
 ## Docker
 
 ```bash
-docker build -t db-webui .
+make docker
 docker run -p 8080:8080 -e TENANT_ID=... -e CLIENT_ID=... -e CLIENT_SECRET=... \
   -e REDIRECT_URL=https://host/auth/callback -e ALLOWED_GROUP_ID=... \
   -e SQL_SERVERS='sqlserver://sql1.internal:1433?encrypt=true' db-webui

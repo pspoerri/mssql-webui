@@ -1,2 +1,5 @@
 .superpowers/
 /db-webui
+backend/dist/*
+!backend/dist/.gitkeep
+.env

@@ -1,6 +1,7 @@
 .git
+.superpowers
+.env
 web/node_modules
-web/dist
+backend/dist
 db-webui
 docs
-.superpowers

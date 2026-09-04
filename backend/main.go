@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-//go:embed all:web/dist
+//go:embed all:dist
 var webFS embed.FS
 
 func env(key, def string) string {
@@ -46,7 +46,7 @@ func main() {
 
 // spaHandler serves web/dist and falls back to index.html for unknown paths.
 func spaHandler() http.HandlerFunc {
-	dist, err := fs.Sub(webFS, "web/dist")
+	dist, err := fs.Sub(webFS, "dist")
 	if err != nil {
 		log.Fatal(err)
 	}
