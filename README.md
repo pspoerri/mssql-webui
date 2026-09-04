@@ -135,7 +135,7 @@ registry to pull from.
 
 ## Limits (by design, easy to add)
 
-Sessions live in memory (single instance) and end after 30 minutes without a request or 12 hours after login, closing their SQL connections. Edits are last-write-wins. Cell
+Sessions live in memory (single instance) and end after 30 minutes without a request (a visible tab pings every 5 minutes) or 12 hours after login, closing their SQL connections. Edits are last-write-wins. Cell
 values are sent as strings and converted by SQL Server. Clearing a nullable
 cell writes NULL. The console returns only the first result set. CSV export
 writes NULL as an empty field.

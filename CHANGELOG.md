@@ -3,7 +3,8 @@
 ## Unreleased
 
 - Sessions end after 30 minutes without a request (in addition to the 12-hour cap); a sweeper
-  drops them every minute and closes their SQL connections. `SECURITY.md` describes the token
+  drops them every minute and closes their SQL connections. A visible tab pings every 5 minutes
+  to stay signed in; hidden tabs time out. `SECURITY.md` describes the token
   flow; the session-to-connection binding is now a named method with a test.
 
 ## v0.4.0 — 2026-09-04

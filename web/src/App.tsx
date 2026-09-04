@@ -24,6 +24,16 @@ export default function App() {
     api<Me>('/api/me').then(setMe).catch(() => {})
   }, [])
 
+  // Keepalive: the server ends a session after 30 minutes without a request. Ping while the
+  // tab is visible, and when it becomes visible again; a hidden tab still times out.
+  // A dropped session makes the ping 401, which sends the browser to the login page.
+  useEffect(() => {
+    const ping = () => { if (document.visibilityState === 'visible') api('/api/me').catch(() => {}) }
+    const id = setInterval(ping, 5 * 60 * 1000)
+    document.addEventListener('visibilitychange', ping)
+    return () => { clearInterval(id); document.removeEventListener('visibilitychange', ping) }
+  }, [])
+
   // Header breadcrumb and tab title follow the selection.
   const crumbs = path === '/help' ? ['Help']
     : sel ? [sel.srv, sel.db, sel.console ? 'SQL console' : sel.table ? `${sel.table.schema}.${sel.table.name}` : ''].filter(Boolean)
