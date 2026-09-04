@@ -51,6 +51,11 @@ func initAuth() {
 	}
 	// Plain http redirect URL means local dev; browsers drop Secure cookies there.
 	secureCookies = strings.HasPrefix(oauthCfg.RedirectURL, "https://")
+	go func() {
+		for now := range time.Tick(time.Minute) {
+			sweepSessions(now)
+		}
+	}()
 }
 
 // sessionTTL caps how long a login, and therefore a leaked sid cookie, stays
@@ -58,26 +63,50 @@ func initAuth() {
 // to 90 days. Re-login also re-checks group membership at Entra.
 const sessionTTL = 12 * time.Hour
 
+// idleTTL drops a session, closing its SQL connections, after this long
+// without a request; the sweeper enforces it even if the browser never returns.
+const idleTTL = 30 * time.Minute
+
 // session is one login. It is reached only through the sid cookie (withSession),
 // and it is the only owner of its token source and its SQL pools: handlers get
 // database handles from session.db, never from a shared place, so a request can
 // use no other user's connections. TestSessionsKeepTheirOwnPoolsAndTokens pins this.
 type session struct {
-	Name    string
-	Email   string
-	expires time.Time
-	ts      oauth2.TokenSource
-	mu      sync.Mutex
-	dbs     map[string]*sql.DB // "server/database" -> pool, filled by sql.go
+	Name     string
+	Email    string
+	expires  time.Time
+	lastSeen time.Time // updated by withSession; guarded by sessions.Mutex
+	ts       oauth2.TokenSource
+	mu       sync.Mutex
+	dbs      map[string]*sql.DB // "server/database" -> pool, filled by sql.go
 }
 
-// ponytail: in-memory sessions, single instance, live until logout, sessionTTL
-// or restart. Expired sessions are dropped on their next request; add a
-// sweeper if abandoned logins pile up. Swap the map for Redis if scaled out.
+// expired reports whether the session passed sessionTTL or sat idle for idleTTL.
+func (s *session) expired(now time.Time) bool {
+	return now.After(s.expires) || now.Sub(s.lastSeen) > idleTTL
+}
+
+// ponytail: in-memory sessions, single instance. Swap the map for Redis if scaled out.
 var sessions = struct {
 	sync.Mutex
 	m map[string]*session
 }{m: map[string]*session{}}
+
+// sweepSessions drops every expired or idle session, closing its SQL pools.
+// A goroutine calls it once a minute; withSession also catches expiry on use.
+func sweepSessions(now time.Time) {
+	var dead []string
+	sessions.Lock()
+	for id, s := range sessions.m {
+		if s.expired(now) {
+			dead = append(dead, id)
+		}
+	}
+	sessions.Unlock()
+	for _, id := range dead {
+		dropSession(id)
+	}
+}
 
 func randomID() string {
 	b := make([]byte, 32)
@@ -200,11 +229,12 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Timeout: 15 * time.Second})
 	sessions.Lock()
 	sessions.m[id] = &session{
-		Name:    cl.Name,
-		Email:   cl.Email,
-		expires: time.Now().Add(sessionTTL),
-		ts:      oauthCfg.TokenSource(ctx, tok),
-		dbs:     map[string]*sql.DB{},
+		Name:     cl.Name,
+		Email:    cl.Email,
+		expires:  time.Now().Add(sessionTTL),
+		lastSeen: time.Now(),
+		ts:       oauthCfg.TokenSource(ctx, tok),
+		dbs:      map[string]*sql.DB{},
 	}
 	sessions.Unlock()
 	setCookie(w, "sid", id, "/", 0)
@@ -231,10 +261,14 @@ func withSession(h func(http.ResponseWriter, *http.Request, *session)) http.Hand
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "not logged in"})
 			return
 		}
+		now := time.Now()
 		sessions.Lock()
 		s := sessions.m[c.Value]
+		if s != nil && !s.expired(now) {
+			s.lastSeen = now
+		}
 		sessions.Unlock()
-		if s != nil && time.Now().After(s.expires) {
+		if s != nil && s.expired(now) {
 			dropSession(c.Value)
 			s = nil
 		}

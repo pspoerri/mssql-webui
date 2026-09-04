@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Sessions end after 30 minutes without a request (in addition to the 12-hour cap); a sweeper
+  drops them every minute and closes their SQL connections. `SECURITY.md` describes the token
+  flow; the session-to-connection binding is now a named method with a test.
+
 ## v0.4.0 — 2026-09-04
 
 - Redesign: one token palette (petrol accent for selection, amber for pending changes, red for
