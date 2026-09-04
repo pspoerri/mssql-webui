@@ -78,17 +78,23 @@ function Help() {
       <h2>Help</h2>
       <ul>
         <li>Expand a database in the tree and pick a table; more rows load as you scroll.</li>
-        <li>Search filters rows: bare words must all occur in one column (<code>User 1001</code> finds that name), <code>col=value</code> matches one column exactly, quotes keep spaces together (<code>name='User 1002'</code>), all terms must match.</li>
+        <li>Search filters rows: bare words must all occur in one column (<code>User 1001</code> finds that name);
+          <code>col=value</code> matches exactly, <code>col^value</code> a prefix, <code>col~value</code> a substring;
+          quotes keep spaces together (<code>name='User 1002'</code>); all terms must match.</li>
+        <li>Hover a column header for its sort and filter icons. The filter popover writes a term for that column into the
+          search box, so several columns can be filtered at once; clicking a lit filter icon removes that filter.</li>
         <li>Tables with a primary key are editable: change cells, tick rows to delete, or add rows.
-          Nothing is written until you press <b>Save</b>, which applies all pending changes in one transaction.
+          Nothing is written until you press <b>Save</b> (or <b>Enter</b> in a cell; Ctrl+Enter in a multi-line editor),
+          which applies all pending changes in one transaction.
           Leaving the table with unsaved changes asks for confirmation.</li>
         <li>Tables without a primary key are append-only; views are read-only.</li>
         <li><b>Download CSV</b> exports the whole table.</li>
         <li>The SQL console runs ad-hoc statements against the selected database.</li>
         <li>Drag a column header's right edge to resize it; double-click the edge to fit the content, double-click again to fit the label.
           Key columns stay in place when scrolling sideways; edited cells are highlighted.</li>
-        <li>The focused cell is also shown in an editor above the table, handy for long values.</li>
-        <li>The selected table, search and scroll position are part of the URL, so a link can be bookmarked or shared.</li>
+        <li>The focused cell is also shown in an editor above the table, handy for long values. <b>Esc</b> (or Revert there)
+          undoes that cell's change and leaves it; Discard undoes everything.</li>
+        <li>The selected table, search, sort and scroll position are part of the URL, so a link can be bookmarked or shared.</li>
       </ul>
       <p>Source code, issues and documentation: <a href="https://github.com/pspoerri/mssql-webui" target="_blank" rel="noreferrer">github.com/pspoerri/mssql-webui</a></p>
     </div>

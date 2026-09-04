@@ -446,6 +446,31 @@ func primaryKey(ctx context.Context, db *sql.DB, obj string) ([]string, error) {
 	return pk, rows.Err()
 }
 
+// typeLabel renders a column type the way DDL spells it: nvarchar(50), varchar(max),
+// decimal(10,2), datetime2(7). User-defined types keep their own name.
+func typeLabel(name, base string, maxLen, prec, scale int) string {
+	if name != base && name != "" {
+		return name
+	}
+	switch base {
+	case "char", "varchar", "binary", "varbinary":
+		if maxLen < 0 {
+			return base + "(max)"
+		}
+		return fmt.Sprintf("%s(%d)", base, maxLen)
+	case "nchar", "nvarchar":
+		if maxLen < 0 {
+			return base + "(max)"
+		}
+		return fmt.Sprintf("%s(%d)", base, maxLen/2)
+	case "decimal", "numeric":
+		return fmt.Sprintf("%s(%d,%d)", base, prec, scale)
+	case "datetime2", "time", "datetimeoffset":
+		return fmt.Sprintf("%s(%d)", base, scale)
+	}
+	return base
+}
+
 func objName(r *http.Request) string {
 	return quoteIdent(r.PathValue("schema")) + "." + quoteIdent(r.PathValue("table"))
 }
@@ -459,7 +484,7 @@ func handleColumns(w http.ResponseWriter, r *http.Request, s *session) {
 	obj := objName(r)
 	rows, err := db.QueryContext(r.Context(), `SELECT c.name, COALESCE(TYPE_NAME(c.user_type_id), ''),
 		COALESCE(TYPE_NAME(c.system_type_id), TYPE_NAME(c.user_type_id), ''),
-		c.is_nullable, c.is_identity, c.is_computed
+		c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity, c.is_computed
 		FROM sys.columns c WHERE c.object_id = OBJECT_ID(@p1) ORDER BY c.column_id`, obj)
 	if err != nil {
 		fail(w, err)
@@ -471,10 +496,12 @@ func handleColumns(w http.ResponseWriter, r *http.Request, s *session) {
 		var c columnInfo
 		var base string
 		var computed bool
-		if err := rows.Scan(&c.Name, &c.Type, &base, &c.Nullable, &c.Identity, &computed); err != nil {
+		var maxLen, prec, scale int
+		if err := rows.Scan(&c.Name, &c.Type, &base, &maxLen, &prec, &scale, &c.Nullable, &c.Identity, &computed); err != nil {
 			fail(w, err)
 			return
 		}
+		c.Type = typeLabel(c.Type, base, maxLen, prec, scale)
 		c.Readonly = c.Identity || computed || readonlyTypes[base]
 		cols = append(cols, c)
 	}
@@ -496,7 +523,26 @@ func handleColumns(w http.ResponseWriter, r *http.Request, s *session) {
 
 // jsonValue makes driver values JSON-safe. go-mssqldb hands back decimals and
 // money as []byte digit strings, GUIDs as 16 raw bytes, binary as bytes.
+// dateTypes are rendered as text the way SQL Server prints them (style 121), so
+// the grid, text search and edits all agree: 2024-01-01 00:13:00, 00:10:02, 1970-01-15.
+var dateTypes = map[string]bool{"DATE": true, "TIME": true, "DATETIME": true, "DATETIME2": true, "SMALLDATETIME": true, "DATETIMEOFFSET": true}
+
 func jsonValue(v any, dbType string) any {
+	if n, ok := v.(int64); ok && dbType == "BIGINT" {
+		return strconv.FormatInt(n, 10) // beyond 2^53 JavaScript numbers lose digits
+	}
+	if t, ok := v.(time.Time); ok {
+		switch dbType {
+		case "DATE":
+			return t.Format("2006-01-02")
+		case "TIME":
+			return t.Format("15:04:05.9999999")
+		case "DATETIMEOFFSET":
+			return t.Format("2006-01-02 15:04:05.9999999 -07:00")
+		default:
+			return t.Format("2006-01-02 15:04:05.9999999")
+		}
+	}
 	b, ok := v.([]byte)
 	if !ok {
 		return v
@@ -550,14 +596,15 @@ var searchableTypes = map[string]bool{
 	"DATE": true, "DATETIME": true, "DATETIME2": true, "SMALLDATETIME": true, "DATETIMEOFFSET": true, "TIME": true,
 }
 
-// searchTerm is one term of a search: a bare word/phrase, or col=value when kv is set.
+// searchTerm is one term of a search: a bare word/phrase (op 0), or col<op>value
+// with op '=' (equals), '^' (starts with) or '~' (contains).
 type searchTerm struct {
 	col, val string
-	kv       bool
+	op       byte
 }
 
 // searchTerms splits q on whitespace; 'single' or "double" quotes keep spaces
-// (and '=') inside a term, so name='User 1002' and 'two words' both work.
+// (and operators) inside a term, so name='User 1002' and 'two words' both work.
 func searchTerms(q string) []searchTerm {
 	var out []searchTerm
 	var cur searchTerm
@@ -584,8 +631,8 @@ func searchTerms(q string) []searchTerm {
 			quote, has = r, true
 		case unicode.IsSpace(r):
 			flush()
-		case r == '=' && !cur.kv && buf.Len() > 0:
-			cur.col, cur.kv = buf.String(), true
+		case (r == '=' || r == '^' || r == '~') && cur.op == 0 && buf.Len() > 0:
+			cur.col, cur.op = buf.String(), byte(r)
 			buf.Reset()
 		default:
 			buf.WriteRune(r)
@@ -596,25 +643,72 @@ func searchTerms(q string) []searchTerm {
 	return out
 }
 
-// searchWhere turns "User 1001 id=3" into a WHERE clause: bare words must all
-// occur in one searchable column (LIKE %word%), col=value matches that column
-// exactly; everything is ANDed. Placeholders start at @p1.
+var charTypes = map[string]bool{"CHAR": true, "NCHAR": true, "VARCHAR": true, "NVARCHAR": true}
+
+// textExpr is the column as text for LIKE, rendered the way the grid shows the
+// value (see jsonValue): char columns as-is so a prefix filter can use an index,
+// date/time in style 121, bit as true/false, money with four decimals.
+// ponytail: floats are CAST with 6 significant digits; use col=value for exact matches.
+func textExpr(col, typ string) string {
+	c := quoteIdent(col)
+	switch {
+	case charTypes[typ]:
+		return c
+	case dateTypes[typ]:
+		return "CONVERT(nvarchar(max), " + c + ", 121)"
+	case typ == "BIT":
+		return "CASE " + c + " WHEN 1 THEN 'true' WHEN 0 THEN 'false' END"
+	case typ == "MONEY" || typ == "SMALLMONEY":
+		return "CONVERT(nvarchar(max), " + c + ", 2)"
+	}
+	return "CAST(" + c + " AS nvarchar(max))"
+}
+
+func findCol(cols []string, name string) int {
+	return slices.IndexFunc(cols, func(c string) bool { return strings.EqualFold(c, name) })
+}
+
+// searchWhere turns "User 1001 id=3 name^Us city~ern" into a WHERE clause: bare
+// words must all occur in one searchable column (LIKE %word%); col=value is
+// exact, col^value a prefix, col~value a substring; everything is ANDed.
+// Placeholders start at @p1.
 func searchWhere(cols, types []string, q string) (string, []any, error) {
 	var conds []string
 	var args []any
 	var words []int // placeholder numbers of the bare words
 	for _, term := range searchTerms(q) {
-		if term.kv {
-			i := slices.IndexFunc(cols, func(c string) bool { return strings.EqualFold(c, term.col) })
-			if i < 0 {
-				return "", nil, fmt.Errorf("unknown column %q", term.col)
-			}
-			args = append(args, term.val)
-			conds = append(conds, fmt.Sprintf("%s = @p%d", quoteIdent(cols[i]), len(args)))
+		if term.op == 0 {
+			args = append(args, "%"+likeEscape(term.val)+"%")
+			words = append(words, len(args))
 			continue
 		}
-		args = append(args, "%"+likeEscape(term.val)+"%")
-		words = append(words, len(args))
+		i := findCol(cols, term.col)
+		if i < 0 {
+			return "", nil, fmt.Errorf("unknown column %q", term.col)
+		}
+		switch term.op {
+		case '=':
+			if types[i] == "BINARY" || types[i] == "VARBINARY" { // shown as base64, so compare as base64
+				b, err := base64.StdEncoding.DecodeString(term.val)
+				if err != nil {
+					return "", nil, fmt.Errorf("column %q: value must be base64", cols[i])
+				}
+				args = append(args, b)
+			} else {
+				args = append(args, term.val)
+			}
+			conds = append(conds, fmt.Sprintf("%s = @p%d", quoteIdent(cols[i]), len(args)))
+		default:
+			if !searchableTypes[types[i]] {
+				return "", nil, fmt.Errorf("column %q cannot be searched as text; use %s=value", cols[i], cols[i])
+			}
+			pat := likeEscape(term.val) + "%"
+			if term.op == '~' {
+				pat = "%" + pat
+			}
+			args = append(args, pat)
+			conds = append(conds, fmt.Sprintf("%s LIKE @p%d ESCAPE '\\'", textExpr(cols[i], types[i]), len(args)))
+		}
 	}
 	if len(words) > 0 {
 		var ors []string
@@ -624,7 +718,7 @@ func searchWhere(cols, types []string, q string) (string, []any, error) {
 			}
 			var ands []string
 			for _, n := range words {
-				ands = append(ands, fmt.Sprintf("CAST(%s AS nvarchar(max)) LIKE @p%d ESCAPE '\\'", quoteIdent(c), n))
+				ands = append(ands, fmt.Sprintf("%s LIKE @p%d ESCAPE '\\'", textExpr(c, types[i]), n))
 			}
 			ors = append(ors, "("+strings.Join(ands, " AND ")+")")
 		}
@@ -641,6 +735,32 @@ func searchWhere(cols, types []string, q string) (string, []any, error) {
 
 func likeEscape(s string) string {
 	return strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`, "[", `\[`).Replace(s)
+}
+
+// orderBy builds the ORDER BY list: the sort column (validated against cols)
+// first, then the primary key so paging stays stable; "(SELECT NULL)" without either.
+func orderBy(cols, pk []string, sort, dir string) (string, error) {
+	var parts []string
+	if sort != "" {
+		i := findCol(cols, sort)
+		if i < 0 {
+			return "", fmt.Errorf("unknown sort column %q", sort)
+		}
+		d := " ASC"
+		if dir == "desc" {
+			d = " DESC"
+		}
+		parts = append(parts, quoteIdent(cols[i])+d)
+	}
+	for _, c := range pk {
+		if !strings.EqualFold(c, sort) {
+			parts = append(parts, quoteIdent(c))
+		}
+	}
+	if len(parts) == 0 {
+		return "(SELECT NULL)", nil
+	}
+	return strings.Join(parts, ", "), nil
 }
 
 // columnTypes returns the column names and driver type names of obj without reading rows.
@@ -685,22 +805,23 @@ func handleRows(w http.ResponseWriter, r *http.Request, s *session) {
 		fail(w, err)
 		return
 	}
-	order := "(SELECT NULL)"
-	if len(pk) > 0 {
-		var q []string
-		for _, c := range pk {
-			q = append(q, quoteIdent(c))
-		}
-		order = strings.Join(q, ", ")
-	}
-	var where string
-	var args []any
-	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
-		cols, types, err := columnTypes(r.Context(), db, obj)
-		if err != nil {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	sort := r.URL.Query().Get("sort")
+	var cols, types []string
+	if q != "" || sort != "" {
+		if cols, types, err = columnTypes(r.Context(), db, obj); err != nil {
 			fail(w, err)
 			return
 		}
+	}
+	order, err := orderBy(cols, pk, sort, r.URL.Query().Get("dir"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	var where string
+	var args []any
+	if q != "" {
 		if where, args, err = searchWhere(cols, types, q); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return

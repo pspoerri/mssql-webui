@@ -30,9 +30,9 @@ build: ## Build the frontend and the single binary ./mssql-webui
 	cd web && pnpm install && pnpm build
 	cd backend && go build -ldflags "$(LDFLAGS)" -o ../$(BIN) .
 
-test: ## go vet + go test, tsc typecheck
+test: ## go vet + go test, tsc typecheck, node tests
 	cd backend && go vet ./... && go test ./...
-	cd web && pnpm install && pnpm exec tsc -b
+	cd web && pnpm install && pnpm exec tsc -b && node --test 'src/**/*.test.ts'
 
 image: ## Build the container image mssql-webui (CONTAINER=docker|podman)
 	$(CONTAINER) build --build-arg VERSION=$(VERSION) -t $(BIN) .

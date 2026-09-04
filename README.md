@@ -49,17 +49,21 @@ endpoint, or VPN).
 Pick a table in the tree; the URL (`/s/{server}/d/{db}/t/{schema}/{table}`)
 can be bookmarked or shared. Rows load 100 at a time as you scroll. The search
 box filters rows: bare words must all occur in one column (`User 1001` finds
-that name), `col=value` matches one column exactly, quotes keep spaces together
-(`name='User 1002'`), and all terms must match (`turing id=2`); the query and the scroll
-position are kept in the URL (`?q=...&row=250`), so a link opens at the same
-place. Drag a column header's right edge to resize it, double-click it to fit
+that name); `col=value` matches one column exactly, `col^value` a prefix,
+`col~value` a substring; quotes keep spaces together (`name='User 1002'`); all
+terms must match (`turing id=2`). Hover a column header for its sort (`⇅`) and
+filter (`▽`) icons: the filter popover writes such a term for that column, so
+several columns can be filtered at once; clicking a lit filter icon removes it. Query, sort and scroll position are
+kept in the URL (`?q=...&sort=col&dir=desc&row=250`), so a link opens at the
+same place. Drag a column header's right edge to resize it, double-click it to fit
 the content and again to fit the label. Key columns stay put when scrolling
 sideways, edited cells are highlighted, and the focused cell is mirrored in an
-editor above the table. **Download CSV** streams the whole table.
+editor above the table; Esc reverts that one cell. **Download CSV** streams the whole table.
 
 Tables with a primary key are editable: change cells, tick rows to delete, or
-add rows. Nothing is written until **Save**, which applies every pending change
-in one transaction (all or nothing). Tables without a primary key are
+add rows. Nothing is written until **Save** (or Enter in a cell, Ctrl+Enter in
+a multi-line editor), which applies every pending change in one transaction
+(all or nothing). Tables without a primary key are
 append-only, views are read-only. The Save button and the footer status
 highlight unsaved changes, and leaving the page or the table asks first.
 The footer shows the build version (`git describe`) and links to Help.
@@ -132,6 +136,14 @@ registry to pull from.
 
 Sessions live in memory (single instance) and expire 12 hours after login. Edits are last-write-wins. Cell
 values are sent as strings and converted by SQL Server. Clearing a nullable
-cell writes NULL. The console returns only the first result set. Free-text
-search casts every column to nvarchar (a table scan); `col=value` can use an
-index. CSV export writes NULL as an empty field.
+cell writes NULL. The console returns only the first result set. CSV export
+writes NULL as an empty field.
+
+Values are rendered the same way in the grid, the console, CSV and text search,
+and can be typed back in that form: dates as `2024-01-01 00:13:00`, `1970-01-15`,
+`00:10:02`, `2026-09-04 13:32:46.7248911 +00:00`; bit as `true`/`false`; money
+with four decimals; decimal and bigint as exact strings. Binary, rowversion,
+geometry/geography, hierarchyid and sql_variant columns are shown as base64 and
+are read-only; `col=value` on a binary column takes base64. Free-text search
+turns each column into text (a table scan; floats with 6 significant digits),
+`col=value` compares natively and can use an index.

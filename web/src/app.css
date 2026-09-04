@@ -29,6 +29,7 @@ main > :not(.grid) { padding: 1rem; }
 .fieldbar { display: flex; gap: .5rem; align-items: flex-start; padding-bottom: .5rem; }
 .fieldbar label { padding-top: 2px; white-space: nowrap; }
 .fieldbar textarea, .fieldbar input { flex: 1; font: inherit; }
+.fieldbar select, .fieldbar button { font: inherit; }
 .toolbar .note { color: #666; }
 .toolbar button.unsaved { background: #2563eb; color: #fff; border-color: #1d4ed8; font-weight: bold; }
 table { border-collapse: collapse; font-size: 13px; table-layout: fixed; }
@@ -37,6 +38,9 @@ th { background: #f7f7f7; position: sticky; top: 0; z-index: 1; }
 th.sticky { z-index: 2; }
 td.sticky { position: sticky; background: #fff; z-index: 1; box-shadow: inset -1px 0 #ddd; }
 td.changed { background: #fff3c4; }
+th .hb { float: right; border: none; background: none; cursor: pointer; padding: 0 2px; margin-right: 2px; color: #999; font: inherit; visibility: hidden; }
+th:hover .hb, th .hb.on { visibility: visible; }
+th .hb.on { color: #2563eb; }
 th .resizer { position: absolute; top: 0; right: 0; width: 5px; height: 100%; cursor: col-resize; user-select: none; touch-action: none; }
 th .resizer:hover { background: #58f; }
 td input[type=text] { width: 100%; border: none; background: transparent; font: inherit; }

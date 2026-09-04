@@ -83,8 +83,23 @@ func TestJSONValue(t *testing.T) {
 	if got := jsonValue(int64(3), "INT"); got != int64(3) {
 		t.Fatalf("int: %v", got)
 	}
+	if got := jsonValue(int64(9007199254740993), "BIGINT"); got != "9007199254740993" {
+		t.Fatalf("bigint: %v", got)
+	}
 	if got := jsonValue(nil, "INT"); got != nil {
 		t.Fatalf("nil: %v", got)
+	}
+	ts := time.Date(2024, 1, 2, 3, 4, 5, 600000000, time.FixedZone("", 2*3600))
+	for typ, want := range map[string]string{
+		"DATE": "2024-01-02", "TIME": "03:04:05.6", "DATETIME": "2024-01-02 03:04:05.6",
+		"DATETIME2": "2024-01-02 03:04:05.6", "DATETIMEOFFSET": "2024-01-02 03:04:05.6 +02:00",
+	} {
+		if got := jsonValue(ts, typ); got != want {
+			t.Errorf("%s: got %v, want %v", typ, got, want)
+		}
+	}
+	if got := jsonValue(time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC), "DATETIME"); got != "2024-01-02 00:00:00" {
+		t.Errorf("whole seconds: %v", got)
 	}
 }
 
@@ -186,8 +201,12 @@ func TestFailStatusCodes(t *testing.T) {
 func TestSearchWhere(t *testing.T) {
 	cols := []string{"id", "name", "photo"}
 	types := []string{"INT", "NVARCHAR", "VARBINARY"}
-	like := func(col string, n int) string {
-		return "CAST([" + col + "] AS nvarchar(max)) LIKE @p" + string(rune('0'+n)) + " ESCAPE '\\'"
+	like := func(col string, n int) string { // char columns are used as-is, others are CAST
+		expr := "[" + col + "]"
+		if col != "name" {
+			expr = "CAST(" + expr + " AS nvarchar(max))"
+		}
+		return expr + " LIKE @p" + string(rune('0'+n)) + " ESCAPE '\\'"
 	}
 	where, args, err := searchWhere(cols, types, "al%an ID=3")
 	if err != nil {
@@ -217,10 +236,83 @@ func TestSearchWhere(t *testing.T) {
 	if where, args, err := searchWhere(cols, types, "  "); where != "" || args != nil || err != nil {
 		t.Fatalf("blank: %q %v %v", where, args, err)
 	}
+	// Prefix and contains operators; char columns are not CAST so an index can help.
+	where, args, err = searchWhere(cols, types, "name^Us id~00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = ` WHERE [name] LIKE @p1 ESCAPE '\' AND CAST([id] AS nvarchar(max)) LIKE @p2 ESCAPE '\'`
+	if where != want || !reflect.DeepEqual(args, []any{"Us%", "%00%"}) {
+		t.Fatalf("ops: %s %#v", where, args)
+	}
+	where, _, _ = searchWhere([]string{"t"}, []string{"TIME"}, "t^00:10")
+	if want := ` WHERE CONVERT(nvarchar(max), [t], 121) LIKE @p1 ESCAPE '\'`; where != want {
+		t.Fatalf("time: %s", where)
+	}
+	for typ, want := range map[string]string{
+		"BIT": "CASE [c] WHEN 1 THEN 'true' WHEN 0 THEN 'false' END", "MONEY": "CONVERT(nvarchar(max), [c], 2)",
+		"NVARCHAR": "[c]", "INT": "CAST([c] AS nvarchar(max))", "DATE": "CONVERT(nvarchar(max), [c], 121)",
+	} {
+		if got := textExpr("c", typ); got != want {
+			t.Errorf("textExpr %s: %s", typ, got)
+		}
+	}
+	if _, args, err := searchWhere(cols, types, "photo=AQI="); err != nil || !reflect.DeepEqual(args, []any{[]byte{1, 2}}) {
+		t.Fatalf("binary =: %v %#v", err, args)
+	}
+	if _, _, err := searchWhere(cols, types, "photo=nope!"); err == nil {
+		t.Fatal("bad base64 accepted")
+	}
+	if _, _, err := searchWhere(cols, types, "photo^ab"); err == nil {
+		t.Fatal("prefix on binary column accepted")
+	}
 	if _, _, err := searchWhere(cols, types, "nope=1"); err == nil {
 		t.Fatal("unknown column accepted")
 	}
 	if _, _, err := searchWhere([]string{"photo"}, []string{"VARBINARY"}, "x"); err == nil {
 		t.Fatal("free text over unsearchable columns accepted")
+	}
+}
+
+func TestOrderBy(t *testing.T) {
+	cols := []string{"id", "name"}
+	cases := []struct{ sort, dir, want string }{
+		{"", "", "[id]"},
+		{"NAME", "desc", "[name] DESC, [id]"},
+		{"id", "desc", "[id] DESC"},
+	}
+	for _, c := range cases {
+		got, err := orderBy(cols, []string{"id"}, c.sort, c.dir)
+		if err != nil || got != c.want {
+			t.Errorf("%q/%q: got %q %v, want %q", c.sort, c.dir, got, err, c.want)
+		}
+	}
+	if got, _ := orderBy(cols, nil, "", ""); got != "(SELECT NULL)" {
+		t.Errorf("no pk: %q", got)
+	}
+	if _, err := orderBy(cols, nil, "nope", ""); err == nil {
+		t.Error("unknown sort column accepted")
+	}
+}
+
+func TestTypeLabel(t *testing.T) {
+	cases := []struct {
+		name, base          string
+		maxLen, prec, scale int
+		want                string
+	}{
+		{"nvarchar", "nvarchar", 100, 0, 0, "nvarchar(50)"},
+		{"nvarchar", "nvarchar", -1, 0, 0, "nvarchar(max)"},
+		{"varchar", "varchar", 20, 0, 0, "varchar(20)"},
+		{"decimal", "decimal", 9, 10, 2, "decimal(10,2)"},
+		{"datetime2", "datetime2", 8, 27, 7, "datetime2(7)"},
+		{"int", "int", 4, 10, 0, "int"},
+		{"sysname", "nvarchar", 256, 0, 0, "sysname"},
+		{"geometry", "geometry", -1, 0, 0, "geometry"},
+	}
+	for _, c := range cases {
+		if got := typeLabel(c.name, c.base, c.maxLen, c.prec, c.scale); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
 	}
 }
