@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 
@@ -23,7 +24,18 @@ var (
 	secureCookies bool
 )
 
+// devSession is set when DEV_USER is given: Entra is skipped, every request
+// runs as this one session, and servers connect with the SQL login in their URL.
+// ponytail: one shared identity for anyone who can reach the port. Never set
+// DEV_USER in production.
+var devSession *session
+
 func initAuth() {
+	if u := os.Getenv("DEV_USER"); u != "" {
+		log.Printf("DEV_USER=%s: Entra login disabled, using SQL logins from SQL_SERVERS", u)
+		devSession = &session{Name: u, Email: u, dbs: map[string]*sql.DB{}}
+		return
+	}
 	tenantID = mustEnv("TENANT_ID")
 	allowedGroup = mustEnv("ALLOWED_GROUP_ID")
 	oauthCfg = &oauth2.Config{
@@ -115,8 +127,10 @@ func checkClaims(c claims, clientID, tenant, group string) error {
 }
 
 func registerAuth(mux *http.ServeMux) {
-	mux.HandleFunc("GET /auth/login", handleLogin)
-	mux.HandleFunc("GET /auth/callback", handleCallback)
+	if devSession == nil {
+		mux.HandleFunc("GET /auth/login", handleLogin)
+		mux.HandleFunc("GET /auth/callback", handleCallback)
+	}
 	mux.HandleFunc("POST /auth/logout", handleLogout)
 	mux.HandleFunc("GET /api/me", withSession(func(w http.ResponseWriter, r *http.Request, s *session) {
 		writeJSON(w, http.StatusOK, map[string]string{"name": s.Name, "email": s.Email})
@@ -191,6 +205,10 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 
 func withSession(h func(http.ResponseWriter, *http.Request, *session)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if devSession != nil {
+			h(w, r, devSession)
+			return
+		}
 		c, err := r.Cookie("sid")
 		if err != nil {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "not logged in"})

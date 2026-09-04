@@ -36,6 +36,7 @@ an error and an empty list.
 | `ALLOWED_GROUP_ID` | object ID of the Entra group allowed in |
 | `SQL_SERVERS` | comma-separated go-mssqldb URLs without credentials, e.g. `sqlserver://sql1.internal:1433?encrypt=true,sqlserver://sql2:1433?trustservercertificate=true` |
 | `LISTEN_ADDR` | default `:8080` |
+| `DEV_USER` | skip Entra; run as this user with SQL logins from `SQL_SERVERS`. Dev only. |
 
 The process needs TCP reachability to every server (peered VNet, private
 endpoint, or VPN).
@@ -49,6 +50,22 @@ export TENANT_ID=... CLIENT_ID=... CLIENT_SECRET=... ALLOWED_GROUP_ID=... \
 go run .            # API on :8080
 cd web && pnpm install && pnpm dev   # UI on :5173, proxies /api and /auth
 ```
+
+## Dev mode (no Entra)
+
+Set `DEV_USER` to skip Entra entirely. Every request runs as that name and
+servers are opened with the SQL login in their `SQL_SERVERS` URL. Anyone who
+can reach the port is that user, so never set it in production.
+
+```bash
+docker run -d --name sql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD='Dev_Passw0rd' \
+  -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+DEV_USER=dev SQL_SERVERS='sqlserver://sa:Dev_Passw0rd@localhost:1433?trustservercertificate=true' go run .
+cd web && pnpm dev
+```
+
+On Apple Silicon add `--platform linux/amd64` and enable Rosetta in Docker
+Desktop. The Entra token path is the one thing dev mode does not exercise.
 
 ## Build
 

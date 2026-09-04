@@ -1,6 +1,7 @@
 package main
 
 import (
+	"database/sql"
 	"reflect"
 	"testing"
 )
@@ -72,5 +73,22 @@ func TestJSONValue(t *testing.T) {
 	}
 	if got := jsonValue(nil, "INT"); got != nil {
 		t.Fatalf("nil: %v", got)
+	}
+}
+
+func TestDevModeUsesSQLLogin(t *testing.T) {
+	m, names, err := parseServers("sqlserver://sa:secret@localhost:1433")
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, serverNames = m, names
+	defer func() { servers, serverNames = nil, nil }()
+	s := &session{dbs: map[string]*sql.DB{}} // ts == nil means dev mode
+	db, err := s.db("localhost", "master")
+	if err != nil || db == nil {
+		t.Fatalf("db: %v", err)
+	}
+	if s.dbs["localhost/master"] != db {
+		t.Fatal("pool not cached")
 	}
 }

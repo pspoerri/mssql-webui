@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -161,15 +162,22 @@ func (s *session) db(srv, dbName string) (*sql.DB, error) {
 		return d, nil
 	}
 	cfg.Database = dbName
-	conn, err := mssql.NewSecurityTokenConnector(cfg, func(ctx context.Context) (string, error) {
-		t, err := s.ts.Token()
+	var conn driver.Connector
+	if s.ts == nil {
+		// Dev mode: user/password come from the SQL_SERVERS URL.
+		conn = mssql.NewConnectorConfig(cfg)
+	} else {
+		c, err := mssql.NewSecurityTokenConnector(cfg, func(ctx context.Context) (string, error) {
+			t, err := s.ts.Token()
+			if err != nil {
+				return "", err
+			}
+			return t.AccessToken, nil
+		})
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		return t.AccessToken, nil
-	})
-	if err != nil {
-		return nil, err
+		conn = c
 	}
 	d := sql.OpenDB(conn)
 	d.SetMaxOpenConns(3)

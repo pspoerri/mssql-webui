@@ -72,3 +72,24 @@ func TestHandleLogoutDropsSession(t *testing.T) {
 		t.Fatalf("status = %d, want %d", w2.Code, http.StatusUnauthorized)
 	}
 }
+
+func TestDevModeSession(t *testing.T) {
+	devSession = &session{Name: "dev", Email: "dev", dbs: map[string]*sql.DB{}}
+	defer func() { devSession = nil }()
+	var got string
+	h := withSession(func(w http.ResponseWriter, r *http.Request, s *session) { got = s.Name })
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest("GET", "/api/me", nil))
+	if got != "dev" || rec.Code != http.StatusOK {
+		t.Fatalf("name %q code %d", got, rec.Code)
+	}
+}
+
+func TestNoSessionIs401(t *testing.T) {
+	h := withSession(func(w http.ResponseWriter, r *http.Request, s *session) { t.Fatal("handler ran") })
+	rec := httptest.NewRecorder()
+	h(rec, httptest.NewRequest("GET", "/api/me", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("code %d", rec.Code)
+	}
+}
