@@ -76,7 +76,15 @@ func TestJSONValue(t *testing.T) {
 	}
 }
 
-func TestDevModeUsesSQLLogin(t *testing.T) {
+// TestDevModeDBIsCachedWithoutTokenSource guards that session.db with a nil
+// TokenSource (dev mode) returns a pool without error and caches it under
+// "server/database". It does NOT distinguish the SQL-login connector from the
+// token connector: mssql.NewSecurityTokenConnector only stores its closure
+// and sql.OpenDB is lazy, so both paths return a non-nil *sql.DB here without
+// dialing anything. Which connector actually gets used is only observable at
+// login time against a live server, so that choice is covered by the Task 8
+// Step 7 integration smoke test, not by this test.
+func TestDevModeDBIsCachedWithoutTokenSource(t *testing.T) {
 	m, names, err := parseServers("sqlserver://sa:secret@localhost:1433")
 	if err != nil {
 		t.Fatal(err)
