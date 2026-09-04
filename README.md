@@ -24,7 +24,10 @@ Every server must accept Entra logins, and each user needs a database user
 (`CREATE USER [name@tenant] FROM EXTERNAL PROVIDER`) or group login on the
 databases they should see. Listing databases queries `sys.databases` on
 `master`, so users need access to `master` too; otherwise the server shows
-an error and an empty list.
+an error and an empty list. Databases where `HAS_DBACCESS()` returns 0 are
+greyed out; system databases are hidden unless toggled on at the bottom of
+the tree. A paused serverless database is retried for up to two minutes
+while it resumes.
 
 ## Configuration
 
@@ -67,14 +70,17 @@ localhost only by default, and it refuses to start if Entra variables
 (`TENANT_ID`/`CLIENT_SECRET`) are also set. Logout is a no-op in dev mode.
 
 ```bash
-docker run -d --name sql -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD='Dev_Passw0rd' \
-  -p 1433:1433 mcr.microsoft.com/mssql/server:2022-latest
+make run-sqlserver   # foreground SQL Server 2022 on :1433, sa / Dev_Passw0rd (override with SA_PASSWORD=...); Ctrl-C stops it
 # in .env: DEV_USER=dev and SQL_SERVERS='sqlserver://sa:Dev_Passw0rd@localhost:1433?trustservercertificate=true'
 make dev
 ```
 
-On Apple Silicon add `--platform linux/amd64` and enable Rosetta in Docker
-Desktop. The Entra token path is the one thing dev mode does not exercise.
+The image is amd64-only and segfaults under QEMU emulation, so on Apple
+Silicon it needs Rosetta: enable it in Docker Desktop, or for podman put
+`rosetta = true` under `[machine]` in `~/.config/containers/containers.conf`
+and recreate the machine with `podman machine rm -f && podman machine init -m 4096 --now`
+(SQL Server also refuses to start with less than 2 GB, and the podman default VM has exactly that).
+The Entra token path is the one thing dev mode does not exercise.
 
 ## Build
 

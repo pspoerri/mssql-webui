@@ -2,13 +2,17 @@ body { margin: 0; font: 14px system-ui, sans-serif; color: #222; }
 .app { display: grid; grid-template-columns: 280px 1fr; grid-template-rows: auto 1fr; height: 100vh; }
 header { grid-column: 1 / -1; display: flex; gap: 1rem; align-items: center; padding: .5rem 1rem; border-bottom: 1px solid #ddd; }
 header .me { margin-left: auto; color: #666; }
-nav { overflow: auto; border-right: 1px solid #ddd; padding: .5rem; }
+nav { overflow: auto; border-right: 1px solid #ddd; padding: .5rem; display: flex; flex-direction: column; }
+nav .toggle { margin-top: auto; padding-top: .5rem; color: #666; font-size: 12px; }
 nav ul { list-style: none; padding-left: 1rem; margin: 0; }
 nav > ul { padding-left: 0; }
 nav a, nav button { cursor: pointer; display: block; width: 100%; text-align: left; background: none; border: none; font: inherit; color: inherit; padding: 2px 4px; border-radius: 3px; }
 nav a:hover, nav button:hover { background: #f0f0f0; }
 nav a.selected, nav button.selected { background: #dde8ff; }
 nav .kind { color: #999; font-size: 11px; margin-left: 4px; }
+nav .schema { display: block; padding: 2px 4px; color: #666; }
+nav .add { color: #888; font-size: 12px; }
+nav .noaccess { color: #aaa; }
 main { overflow: auto; padding: 1rem; }
 .toolbar { display: flex; gap: .5rem; align-items: center; margin-bottom: .5rem; }
 .toolbar .note { color: #666; }

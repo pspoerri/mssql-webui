@@ -155,15 +155,18 @@ func parseServers(list string) (map[string]msdsn.Config, []string, error) {
 
 // db returns the session's pool for one database, creating it on first use.
 // New connections fetch the user's current access token, so refresh is transparent.
-func (s *session) db(srv, dbName string) (*sql.DB, error) {
+func (s *session) db(ctx context.Context, srv, dbName string) (*sql.DB, error) {
 	cfg, ok := servers[srv]
 	if !ok {
 		return nil, errNotFound
 	}
 	key := srv + "/" + dbName
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if d, ok := s.dbs[key]; ok {
+		s.mu.Unlock()
+		if err := wake(ctx, d); err != nil {
+			return nil, err
+		}
 		return d, nil
 	}
 	cfg.Database = dbName
@@ -180,6 +183,7 @@ func (s *session) db(srv, dbName string) (*sql.DB, error) {
 			return t.AccessToken, nil
 		})
 		if err != nil {
+			s.mu.Unlock()
 			return nil, err
 		}
 		conn = c
@@ -191,7 +195,37 @@ func (s *session) db(srv, dbName string) (*sql.DB, error) {
 	// abandoned sessions matter.
 	d.SetConnMaxIdleTime(5 * time.Minute)
 	s.dbs[key] = d
+	s.mu.Unlock()
+	if err := wake(ctx, d); err != nil {
+		return nil, err
+	}
 	return d, nil
+}
+
+// Azure error numbers a paused serverless database (or a busy gateway)
+// returns while it resumes; the login itself triggers the resume.
+var resuming = map[int32]bool{40613: true, 40197: true, 40501: true, 49918: true, 49919: true, 49920: true}
+
+var wakeRetry = 5 * time.Second
+
+// wake pings d and retries while the server says the database is resuming.
+// ponytail: one ping per request; cache a last-seen-alive time per handle if
+// the extra round trip shows up.
+func wake(ctx context.Context, d *sql.DB) error {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	for {
+		err := d.PingContext(ctx)
+		var me mssql.Error
+		if err == nil || !errors.As(err, &me) || !resuming[me.Number] {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(wakeRetry):
+		}
+	}
 }
 
 // fail maps errors to status codes: token refresh failure means the login is
@@ -205,16 +239,31 @@ func fail(w http.ResponseWriter, err error) {
 	case errors.As(err, &re):
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "session expired"})
 	case errors.As(err, &me):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": me.Message})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": sqlMessages(me)})
 	default:
 		log.Printf("error: %v", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 }
 
+// sqlMessages joins every message the server sent, so e.g. CREATE DATABASE's
+// "check related errors" comes with the related error.
+func sqlMessages(me mssql.Error) string {
+	if len(me.All) < 2 {
+		return me.Message
+	}
+	msgs := make([]string, len(me.All))
+	for i, e := range me.All {
+		msgs[i] = e.Message
+	}
+	return strings.Join(msgs, "\n")
+}
+
 func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/servers", withSession(handleServers))
 	mux.HandleFunc("GET /api/s/{srv}/d/{db}/tables", withSession(handleTables))
+	mux.HandleFunc("POST /api/s/{srv}/databases", withSession(handleCreateDatabase))
+	mux.HandleFunc("POST /api/s/{srv}/d/{db}/schemas", withSession(handleCreateSchema))
 	mux.HandleFunc("GET /api/s/{srv}/d/{db}/t/{schema}/{table}", withSession(handleColumns))
 	mux.HandleFunc("GET /api/s/{srv}/d/{db}/t/{schema}/{table}/rows", withSession(handleRows))
 	mux.HandleFunc("POST /api/s/{srv}/d/{db}/t/{schema}/{table}/rows", withSession(handleBatch))
@@ -223,36 +272,45 @@ func registerAPI(mux *http.ServeMux) {
 
 type serverInfo struct {
 	Name      string   `json:"name"`
-	Databases []string `json:"databases"`
+	Databases []dbInfo `json:"databases"`
 	Error     string   `json:"error,omitempty"`
 }
 
-func listDatabases(ctx context.Context, s *session, srv string) ([]string, error) {
-	db, err := s.db(srv, "master")
+type dbInfo struct {
+	Name   string `json:"name"`
+	Access bool   `json:"access"` // HAS_DBACCESS; only an explicit 0 is reported as no access
+}
+
+// listDatabases returns online databases; system=false skips master, model, msdb, tempdb.
+func listDatabases(ctx context.Context, s *session, srv string, system bool) ([]dbInfo, error) {
+	db, err := s.db(ctx, srv, "master")
 	if err != nil {
 		return nil, err
 	}
-	rows, err := db.QueryContext(ctx, "SELECT name FROM sys.databases WHERE state = 0 ORDER BY name")
+	rows, err := db.QueryContext(ctx, `SELECT name, HAS_DBACCESS(name) FROM sys.databases
+		WHERE state = 0 AND (database_id > 4 OR @p1 = 1) ORDER BY name`, system)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	names := []string{}
+	out := []dbInfo{}
 	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
+		var d dbInfo
+		var access sql.NullInt64
+		if err := rows.Scan(&d.Name, &access); err != nil {
 			return nil, err
 		}
-		names = append(names, n)
+		d.Access = !access.Valid || access.Int64 != 0
+		out = append(out, d)
 	}
-	return names, rows.Err()
+	return out, rows.Err()
 }
 
 func handleServers(w http.ResponseWriter, r *http.Request, s *session) {
 	out := []serverInfo{}
 	for _, name := range serverNames {
-		info := serverInfo{Name: name, Databases: []string{}}
-		dbs, err := listDatabases(r.Context(), s, name)
+		info := serverInfo{Name: name, Databases: []dbInfo{}}
+		dbs, err := listDatabases(r.Context(), s, name, r.URL.Query().Get("system") == "1")
 		var re *oauth2.RetrieveError
 		if errors.As(err, &re) {
 			fail(w, err)
@@ -274,39 +332,77 @@ type tableInfo struct {
 	Kind   string `json:"kind"`
 }
 
+// handleTables lists user schemas and their tables and views. Empty schemas are
+// included so a freshly created one shows up in the tree.
 func handleTables(w http.ResponseWriter, r *http.Request, s *session) {
-	db, err := s.db(r.PathValue("srv"), r.PathValue("db"))
+	db, err := s.db(r.Context(), r.PathValue("srv"), r.PathValue("db"))
 	if err != nil {
 		fail(w, err)
 		return
 	}
 	rows, err := db.QueryContext(r.Context(), `SELECT s.name, o.name, o.type
-		FROM sys.objects o JOIN sys.schemas s ON s.schema_id = o.schema_id
-		WHERE o.type IN ('U', 'V') ORDER BY s.name, o.name`)
+		FROM sys.schemas s LEFT JOIN sys.objects o ON o.schema_id = s.schema_id AND o.type IN ('U', 'V')
+		WHERE s.schema_id < 16384 AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA', 'guest')
+		ORDER BY s.name, o.name`)
 	if err != nil {
 		fail(w, err)
 		return
 	}
 	defer rows.Close()
-	out := []tableInfo{}
+	schemas, tables := []string{}, []tableInfo{}
 	for rows.Next() {
-		var t tableInfo
-		var typ string
-		if err := rows.Scan(&t.Schema, &t.Name, &typ); err != nil {
+		var schema string
+		var name, typ sql.NullString
+		if err := rows.Scan(&schema, &name, &typ); err != nil {
 			fail(w, err)
 			return
 		}
-		t.Kind = "table"
-		if strings.TrimSpace(typ) == "V" {
+		if len(schemas) == 0 || schemas[len(schemas)-1] != schema {
+			schemas = append(schemas, schema)
+		}
+		if !name.Valid {
+			continue
+		}
+		t := tableInfo{Schema: schema, Name: name.String, Kind: "table"}
+		if strings.TrimSpace(typ.String) == "V" {
 			t.Kind = "view"
 		}
-		out = append(out, t)
+		tables = append(tables, t)
 	}
 	if err := rows.Err(); err != nil {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, map[string]any{"schemas": schemas, "tables": tables})
+}
+
+// createNamed runs `ddl [name]` with the name from the JSON body {"name": ...}.
+func createNamed(w http.ResponseWriter, r *http.Request, s *session, dbName, ddl string) {
+	db, err := s.db(r.Context(), r.PathValue("srv"), dbName)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.Name) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name required"})
+		return
+	}
+	if _, err := db.ExecContext(r.Context(), ddl+" "+quoteIdent(body.Name)); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"name": body.Name})
+}
+
+func handleCreateSchema(w http.ResponseWriter, r *http.Request, s *session) {
+	createNamed(w, r, s, r.PathValue("db"), "CREATE SCHEMA")
+}
+
+func handleCreateDatabase(w http.ResponseWriter, r *http.Request, s *session) {
+	createNamed(w, r, s, "master", "CREATE DATABASE")
 }
 
 type columnInfo struct {
@@ -351,7 +447,7 @@ func objName(r *http.Request) string {
 }
 
 func handleColumns(w http.ResponseWriter, r *http.Request, s *session) {
-	db, err := s.db(r.PathValue("srv"), r.PathValue("db"))
+	db, err := s.db(r.Context(), r.PathValue("srv"), r.PathValue("db"))
 	if err != nil {
 		fail(w, err)
 		return
@@ -442,7 +538,7 @@ func readRows(rows *sql.Rows, max int) ([]string, [][]any, error) {
 }
 
 func handleRows(w http.ResponseWriter, r *http.Request, s *session) {
-	db, err := s.db(r.PathValue("srv"), r.PathValue("db"))
+	db, err := s.db(r.Context(), r.PathValue("srv"), r.PathValue("db"))
 	if err != nil {
 		fail(w, err)
 		return
@@ -496,7 +592,7 @@ func handleRows(w http.ResponseWriter, r *http.Request, s *session) {
 // ponytail: values are strings and SQL Server converts them; last write wins.
 // Add typed conversion or a rowversion check if either bites.
 func handleBatch(w http.ResponseWriter, r *http.Request, s *session) {
-	db, err := s.db(r.PathValue("srv"), r.PathValue("db"))
+	db, err := s.db(r.Context(), r.PathValue("srv"), r.PathValue("db"))
 	if err != nil {
 		fail(w, err)
 		return
@@ -542,7 +638,7 @@ func handleBatch(w http.ResponseWriter, r *http.Request, s *session) {
 // ponytail: SELECT/WITH return the first result set, anything else returns
 // rows affected. Multiple result sets are dropped; add NextResultSet if needed.
 func handleQuery(w http.ResponseWriter, r *http.Request, s *session) {
-	db, err := s.db(r.PathValue("srv"), r.PathValue("db"))
+	db, err := s.db(r.Context(), r.PathValue("srv"), r.PathValue("db"))
 	if err != nil {
 		fail(w, err)
 		return

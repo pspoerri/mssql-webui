@@ -1,4 +1,5 @@
-export type ServerInfo = { name: string; databases: string[]; error?: string }
+export type DbInfo = { name: string; access: boolean }
+export type ServerInfo = { name: string; databases: DbInfo[]; error?: string }
 export type TableInfo = { schema: string; name: string; kind: 'table' | 'view' }
 export type ColumnInfo = { name: string; type: string; nullable: boolean; identity: boolean; readonly: boolean }
 export type TableMeta = { columns: ColumnInfo[]; pk: string[] }

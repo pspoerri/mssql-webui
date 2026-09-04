@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	mssql "github.com/microsoft/go-mssqldb"
 	"golang.org/x/oauth2"
@@ -101,13 +104,56 @@ func TestDevModeDBIsCachedWithoutTokenSource(t *testing.T) {
 	servers, serverNames = m, names
 	defer func() { servers, serverNames = nil, nil }()
 	s := &session{dbs: map[string]*sql.DB{}} // ts == nil means dev mode
-	db, err := s.db("localhost", "master")
-	if err != nil || db == nil {
-		t.Fatalf("db: %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the wake ping must bail before dialing; the handle is still cached
+	if _, err := s.db(ctx, "localhost", "master"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("db: want context.Canceled, got %v", err)
 	}
-	defer db.Close()
-	if s.dbs["localhost/master"] != db {
+	db := s.dbs["localhost/master"]
+	if db == nil {
 		t.Fatal("pool not cached")
+	}
+	db.Close()
+}
+
+// fakeConnector fails the first `fails` connects with the given SQL error number.
+type fakeConnector struct {
+	fails, calls int
+	number       int32
+}
+
+func (f *fakeConnector) Connect(context.Context) (driver.Conn, error) {
+	f.calls++
+	if f.calls <= f.fails {
+		return nil, mssql.Error{Number: f.number}
+	}
+	return fakeConn{}, nil
+}
+func (f *fakeConnector) Driver() driver.Driver { return nil }
+
+type fakeConn struct{}
+
+func (fakeConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("unused") }
+func (fakeConn) Close() error                        { return nil }
+func (fakeConn) Begin() (driver.Tx, error)           { return nil, errors.New("unused") }
+
+func TestWakeRetriesWhileResuming(t *testing.T) {
+	wakeRetry = time.Millisecond
+	for _, c := range []struct {
+		number    int32
+		wantCalls int
+		wantErr   bool
+	}{
+		{40613, 3, false}, // paused serverless database: retry until it is up
+		{18456, 1, true},  // login failed: give up at once
+	} {
+		fc := &fakeConnector{fails: 2, number: c.number}
+		d := sql.OpenDB(fc)
+		err := wake(context.Background(), d)
+		d.Close()
+		if (err != nil) != c.wantErr || fc.calls != c.wantCalls {
+			t.Errorf("error %d: err=%v calls=%d, want err=%v calls=%d", c.number, err, fc.calls, c.wantErr, c.wantCalls)
+		}
 	}
 }
 
