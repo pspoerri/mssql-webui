@@ -58,6 +58,10 @@ func initAuth() {
 // to 90 days. Re-login also re-checks group membership at Entra.
 const sessionTTL = 12 * time.Hour
 
+// session is one login. It is reached only through the sid cookie (withSession),
+// and it is the only owner of its token source and its SQL pools: handlers get
+// database handles from session.db, never from a shared place, so a request can
+// use no other user's connections. TestSessionsKeepTheirOwnPoolsAndTokens pins this.
 type session struct {
 	Name    string
 	Email   string

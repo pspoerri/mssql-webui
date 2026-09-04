@@ -131,6 +131,35 @@ func TestDevModeDBIsCachedWithoutTokenSource(t *testing.T) {
 	db.Close()
 }
 
+// Two logins get separate pools, and each pool's token callback answers from its own session.
+func TestSessionsKeepTheirOwnPoolsAndTokens(t *testing.T) {
+	m, names, err := parseServers("sqlserver://localhost:1433")
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, serverNames = m, names
+	defer func() { servers, serverNames = nil, nil }()
+	ann := &session{Name: "Ann", ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "token-ann"}), dbs: map[string]*sql.DB{}}
+	bob := &session{Name: "Bob", ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "token-bob"}), dbs: map[string]*sql.DB{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the wake ping must bail before dialing; the handles are still cached
+	for _, s := range []*session{ann, bob} {
+		if _, err := s.db(ctx, "localhost", "master"); !errors.Is(err, context.Canceled) {
+			t.Fatalf("%s: want context.Canceled, got %v", s.Name, err)
+		}
+		defer s.dbs["localhost/master"].Close()
+	}
+	if ann.dbs["localhost/master"] == bob.dbs["localhost/master"] {
+		t.Fatal("sessions share a pool")
+	}
+	if tok, _ := ann.token(ctx); tok != "token-ann" {
+		t.Fatalf("ann's connections would log in with %q", tok)
+	}
+	if tok, _ := bob.token(ctx); tok != "token-bob" {
+		t.Fatalf("bob's connections would log in with %q", tok)
+	}
+}
+
 // fakeConnector fails the first `fails` connects with the given SQL error number.
 type fakeConnector struct {
 	fails, calls int

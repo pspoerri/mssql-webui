@@ -156,8 +156,20 @@ func parseServers(list string) (map[string]msdsn.Config, []string, error) {
 	return m, names, nil
 }
 
+// token is the only way a SQL connection gets an access token: every connection
+// opened from one of this session's pools calls it, and it answers from this
+// session's token source. Two sessions never share a pool, so a connection can
+// only ever carry the identity of the session that owns it.
+func (s *session) token(context.Context) (string, error) {
+	t, err := s.ts.Token()
+	if err != nil {
+		return "", err
+	}
+	return t.AccessToken, nil
+}
+
 // db returns the session's pool for one database, creating it on first use.
-// New connections fetch the user's current access token, so refresh is transparent.
+// New connections fetch the user's current access token via token, so refresh is transparent.
 func (s *session) db(ctx context.Context, srv, dbName string) (*sql.DB, error) {
 	cfg, ok := servers[srv]
 	if !ok {
@@ -178,13 +190,7 @@ func (s *session) db(ctx context.Context, srv, dbName string) (*sql.DB, error) {
 		// Dev mode: user/password come from the SQL_SERVERS URL.
 		conn = mssql.NewConnectorConfig(cfg)
 	} else {
-		c, err := mssql.NewSecurityTokenConnector(cfg, func(ctx context.Context) (string, error) {
-			t, err := s.ts.Token()
-			if err != nil {
-				return "", err
-			}
-			return t.AccessToken, nil
-		})
+		c, err := mssql.NewSecurityTokenConnector(cfg, s.token)
 		if err != nil {
 			s.mu.Unlock()
 			return nil, err
