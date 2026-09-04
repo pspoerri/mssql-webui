@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.0 — 2026-09-04
+
+- Column resizing: drag a header's right edge; double-click to fit the loaded content
+  (capped at 120 characters), double-click again to fit the label. Cells show the full
+  value on hover.
+- Primary-key columns and the delete checkbox stay pinned when scrolling sideways;
+  edited cells are highlighted.
+- Field editor bar: the focused cell is mirrored in a textarea above the table with its
+  row key. Toolbar and header stay fixed while scrolling.
+- Scroll position in the URL (`?row=N`, per search); links open at the same row.
+- Refresh button next to each server name.
+- `docs/big-table.sql`: a 2000-row, 20-column test table.
+
 ## v0.1.0 — 2026-09-04
 
 First release.

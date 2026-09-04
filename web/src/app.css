@@ -16,15 +16,30 @@ nav a.selected, nav button.selected { background: #dde8ff; }
 nav .kind { color: #999; font-size: 11px; margin-left: 4px; }
 nav .schema { display: block; padding: 2px 4px; color: #666; }
 nav .add { color: #888; font-size: 12px; }
+nav .refresh { display: inline; width: auto; margin-left: 4px; color: #888; }
 nav .noaccess { color: #aaa; }
-main { overflow: auto; padding: 1rem; }
-.toolbar { display: flex; gap: .5rem; align-items: center; margin-bottom: .5rem; }
+main { overflow: auto; }
+main > :not(.grid) { padding: 1rem; }
+.grid { width: max-content; min-width: 100%; } /* wider than the viewport so .top can stick left */
+.grid table { margin: 0 1rem; }
+.grid .more { margin: .5rem 1rem; }
+/* ponytail: 280px is the sidebar width from .app; fold into a CSS variable if the layout changes */
+.top { position: sticky; top: 0; left: 0; z-index: 3; background: #fff; padding: 1rem 1rem 0; width: calc(100vw - 280px); box-sizing: border-box; }
+.toolbar { display: flex; gap: .5rem; align-items: center; padding-bottom: .5rem; }
+.fieldbar { display: flex; gap: .5rem; align-items: flex-start; padding-bottom: .5rem; }
+.fieldbar label { padding-top: 2px; white-space: nowrap; }
+.fieldbar textarea { flex: 1; font: inherit; }
 .toolbar .note { color: #666; }
 .toolbar button.unsaved { background: #2563eb; color: #fff; border-color: #1d4ed8; font-weight: bold; }
-table { border-collapse: collapse; font-size: 13px; }
-th, td { border: 1px solid #ddd; padding: 2px 6px; text-align: left; white-space: nowrap; }
-th { background: #f7f7f7; position: sticky; top: 0; }
-td input[type=text] { width: 100%; min-width: 6em; border: none; background: transparent; font: inherit; }
+table { border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+th, td { border: 1px solid #ddd; padding: 2px 6px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+th { background: #f7f7f7; position: sticky; top: 0; z-index: 1; }
+th.sticky { z-index: 2; }
+td.sticky { position: sticky; background: #fff; z-index: 1; box-shadow: inset -1px 0 #ddd; }
+td.changed { background: #fff3c4; }
+th .resizer { position: absolute; top: 0; right: 0; width: 5px; height: 100%; cursor: col-resize; user-select: none; touch-action: none; }
+th .resizer:hover { background: #58f; }
+td input[type=text] { width: 100%; border: none; background: transparent; font: inherit; }
 td input[type=text]:focus { outline: 1px solid #58f; }
 tr.deleted td { text-decoration: line-through; opacity: .5; }
 tr.new { background: #f0fff0; }

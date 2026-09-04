@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { api, cellToString, enc, type Cell, type RowsPage, type TableInfo, type TableMeta } from './api'
 
 type Props = { srv: string; db: string; table: TableInfo; onDirty: (d: boolean) => void }
 type Values = Record<string, string | null>
+type Focus = { i: number; col: string; added: boolean } // the cell shown in the field bar
 
 const LIMIT = 100
 
@@ -12,32 +13,47 @@ export function TableView({ srv, db, table, onDirty }: Props) {
   const [page, setPage] = useState<RowsPage | null>(null)
   const [loading, setLoading] = useState(false)
   const [q, setQ] = useState(() => new URLSearchParams(location.search).get('q') ?? '')
+  const startRow = useRef(Math.max(0, +(new URLSearchParams(location.search).get('row') ?? 1) - 1)) // ?row= to scroll to once loaded; 0 = none
+  const inflight = useRef(false)
   const [draft, setDraft] = useState(q)
   const [edits, setEdits] = useState<Record<number, Values>>({})
   const [deleted, setDeleted] = useState<Set<number>>(new Set())
   const [added, setAdded] = useState<Values[]>([])
+  const [focus, setFocus] = useState<Focus | null>(null)
   const [err, setErr] = useState('')
   const gen = useRef(0) // bumps when q changes so a late page from the previous search is dropped
   const sentinel = useRef<HTMLDivElement>(null)
+  const tableRef = useRef<HTMLTableElement>(null)
+  const topRef = useRef<HTMLDivElement>(null)
+  const [topH, setTopH] = useState(0) // height of the sticky toolbar block; the header sticks below it
+  const [widths, setWidths] = useState<Record<string, number>>({})
+  const drag = useRef<{ col: string; x: number; w: number } | null>(null)
+  const width = (c: string) => widths[c] ?? 120
 
   const reset = () => {
     setEdits({})
     setDeleted(new Set())
     setAdded([])
+    setFocus(null)
   }
 
   // Loads rows from offset; offset 0 replaces the page, anything else appends.
-  const load = useCallback((offset: number) => {
+  const load = useCallback((offset: number, limit = LIMIT) => {
+    if (offset && inflight.current) return
     const g = gen.current
+    inflight.current = true
     setLoading(true)
-    api<RowsPage>(`${base}/rows?offset=${offset}&limit=${LIMIT}&q=${enc(q)}`)
+    api<RowsPage>(`${base}/rows?offset=${offset}&limit=${limit}&q=${enc(q)}`)
       .then((p) => {
         if (g !== gen.current) return
         setPage((prev) => (offset && prev ? { ...p, rows: [...prev.rows, ...p.rows] } : p))
         setErr('')
       })
       .catch((e) => g === gen.current && setErr(e.message))
-      .finally(() => g === gen.current && setLoading(false))
+      .finally(() => {
+        inflight.current = false
+        if (g === gen.current) setLoading(false)
+      })
   }, [base, q])
 
   useEffect(() => {
@@ -45,11 +61,51 @@ export function TableView({ srv, db, table, onDirty }: Props) {
   }, [base])
   useEffect(() => {
     gen.current++
-    history.replaceState(null, '', location.pathname + (q ? `?q=${enc(q)}` : ''))
+    setUrl(q, startRow.current)
     reset()
     setPage(null)
-    load(0)
+    load(0, Math.min(500, Math.ceil((startRow.current + 1) / LIMIT) * LIMIT)) // 500 is the backend cap
   }, [load, q])
+
+  useLayoutEffect(() => {
+    const h = Math.floor(topRef.current?.getBoundingClientRect().height ?? 0) // floor: overlap beats a hairline gap
+    if (h !== topH) setTopH(h)
+  })
+
+  // ?row=: keep loading until the row exists with a page of rows after it (so the scroll is
+  // not clamped at the end of the table), then scroll it under the sticky header.
+  useEffect(() => {
+    const target = startRow.current
+    if (!target || !page || loading) return
+    if (page.rows.length < target + LIMIT && page.hasMore) {
+      load(page.rows.length)
+      return
+    }
+    if (page.rows.length <= target) {
+      startRow.current = 0
+      return
+    }
+    startRow.current = 0
+    scrollToRow(tableRef.current, target, topH)
+  }, [page, loading, load, topH])
+
+  // Scrolling updates ?row= with the first visible row (1-based).
+  // ponytail: assumes uniform row height; rows are single-line, so it holds.
+  useEffect(() => {
+    const t = tableRef.current
+    const main = t?.closest('main')
+    if (!t || !main || !page) return
+    let last = -1
+    const onScroll = () => {
+      if (startRow.current) return // still restoring
+      const rowH = t.tBodies[0].offsetHeight / Math.max(1, t.tBodies[0].rows.length)
+      const top = main.getBoundingClientRect().top - t.getBoundingClientRect().top + topH
+      const row = Math.min(page.rows.length - 1, Math.max(0, Math.round(top / rowH)))
+      if (row !== last) setUrl(q, (last = row))
+    }
+    main.addEventListener('scroll', onScroll, { passive: true })
+    return () => main.removeEventListener('scroll', onScroll)
+  }, [page, q, topH])
 
   // Infinite scroll: when the sentinel under the table becomes visible, fetch the next page.
   // ponytail: rows stay in the DOM; add virtualization if scrolling thousands of rows lags.
@@ -61,8 +117,34 @@ export function TableView({ srv, db, table, onDirty }: Props) {
     return () => io.disconnect()
   }, [page, loading, load])
 
+  // Column widths: auto-fit (capped) when a column first appears; drag the header edge to
+  // resize, double-click it to fit the loaded content, double-click again to fit the label.
+  // ponytail: widths are per mount; persist them in localStorage if people ask.
+  const fitWidth = (col: string, cap: number) => {
+    if (!page || !tableRef.current) return 120
+    const j = page.columns.indexOf(col)
+    // Long values never widen a column past 120 chars; the full value is in the cell's tooltip.
+    const texts = page.rows.map((r, i) => (edits[i]?.[col] ?? cellToString(r[j]) ?? 'NULL').slice(0, 120))
+    const w = Math.max(textWidth(tableRef.current, [col], true), textWidth(tableRef.current, texts, false))
+    return Math.min(cap, w) + 14
+  }
+  useLayoutEffect(() => {
+    if (!page) return
+    setWidths((w) => {
+      const next = { ...w }
+      for (const c of page.columns) if (!(c in next)) next[c] = fitWidth(c, 300)
+      return next
+    })
+  }, [page]) // eslint-disable-line react-hooks/exhaustive-deps
+  const fit = (col: string) => {
+    const content = fitWidth(col, Infinity)
+    const label = (tableRef.current ? textWidth(tableRef.current, [col], true) : 100) + 14
+    setWidths((w) => ({ ...w, [col]: w[col] === content ? label : content }))
+  }
+
   const isTable = table.kind === 'table'
-  const editable = isTable && !!meta && meta.pk.length > 0 // no PK: append-only
+  const pk = meta?.pk ?? []
+  const editable = isTable && pk.length > 0 // no PK: append-only
   const dirty = Object.keys(edits).length > 0 || deleted.size > 0 || added.length > 0
   useEffect(() => {
     onDirty(dirty)
@@ -75,8 +157,27 @@ export function TableView({ srv, db, table, onDirty }: Props) {
   // Add an explicit NULL toggle if someone needs an empty string in a nullable column.
   const normalize = (name: string, v: string) => (v === '' && colMeta(name)?.nullable ? null : v)
 
-  const edit = (row: number, col: string, v: string) =>
-    setEdits({ ...edits, [row]: { ...edits[row], [col]: normalize(col, v) } })
+  // Key columns (and the delete checkbox) stay put while scrolling sideways.
+  const stickyLeft = (col: string) => {
+    let x = isTable ? 28 : 0
+    for (const c of page?.columns ?? []) {
+      if (c === col) return x
+      if (pk.includes(c)) x += width(c)
+    }
+    return 0
+  }
+  const cellClass = (col: string, changed: boolean) =>
+    [pk.includes(col) && 'sticky', changed && 'changed'].filter(Boolean).join(' ')
+
+  const idx = (c: string) => page?.columns.indexOf(c) ?? -1
+  const cellValue = (f: Focus): string | null =>
+    f.added ? added[f.i]?.[f.col] ?? null
+      : edits[f.i] && f.col in edits[f.i] ? edits[f.i][f.col] : cellToString(page!.rows[f.i][idx(f.col)])
+  const setCell = (f: Focus, v: string) => {
+    const val = normalize(f.col, v)
+    if (f.added) setAdded(added.map((r, k) => (k === f.i ? { ...r, [f.col]: val } : r)))
+    else setEdits({ ...edits, [f.i]: { ...edits[f.i], [f.col]: val } })
+  }
   const toggleDelete = (row: number) => {
     const next = new Set(deleted)
     if (next.has(row)) next.delete(row)
@@ -87,13 +188,13 @@ export function TableView({ srv, db, table, onDirty }: Props) {
     e.preventDefault()
     if (draft.trim() === q) return
     if (dirty && !confirm('Discard unsaved changes?')) return
+    startRow.current = 0
     setQ(draft.trim())
   }
 
+  const keyOf = (row: Cell[]) => Object.fromEntries(pk.map((k) => [k, cellToString(row[idx(k)])]))
   const save = async () => {
     if (!page || !meta) return
-    const idx = (c: string) => page.columns.indexOf(c)
-    const keyOf = (row: Cell[]) => Object.fromEntries(meta.pk.map((k) => [k, cellToString(row[idx(k)])]))
     const body = {
       inserts: added,
       updates: Object.entries(edits)
@@ -112,53 +213,88 @@ export function TableView({ srv, db, table, onDirty }: Props) {
 
   if (!page) return err ? <div className="error">{err}</div> : <p>Loading…</p>
 
+  const focusValue = focus ? cellValue(focus) : null
+  const focusKey = focus && (focus.added ? 'new row' : Object.entries(keyOf(page.rows[focus.i])).map(([k, v]) => `${k}=${v}`).join(' '))
+
   return (
-    <div>
-      <div className="toolbar">
-        <b>{table.schema}.{table.name}</b>
-        <form onSubmit={search}>
-          <input type="search" value={draft} placeholder="Search: word or col=value" aria-label="Search"
-            title="Words match any column; col=value matches one column exactly; all terms must match"
-            onChange={(e) => setDraft(e.target.value)} />
-        </form>
-        <span>{page.rows.length}{page.hasMore ? '+' : ''} rows</span>
-        <a href={`${base}/csv`} download={`${table.schema}.${table.name}.csv`}>Download CSV</a>
-        {isTable ? (
-          <>
-            <button onClick={() => setAdded([...added, {}])}>Add row</button>
-            <button disabled={!dirty} className={dirty ? 'unsaved' : ''} title={dirty ? 'Unsaved changes' : ''} onClick={save}>Save</button>
-            <button disabled={!dirty} onClick={reset}>Discard</button>
-            {meta && !editable && <span className="note">No primary key: append-only</span>}
-          </>
-        ) : (
-          <span className="note">View: read-only</span>
+    <div className="grid">
+      <div className="top" ref={topRef}>
+        <div className="toolbar">
+          <b>{table.schema}.{table.name}</b>
+          <form onSubmit={search}>
+            <input type="search" value={draft} placeholder="Search: word or col=value" aria-label="Search"
+              title="Words match any column; col=value matches one column exactly; all terms must match"
+              onChange={(e) => setDraft(e.target.value)} />
+          </form>
+          <span>{page.rows.length}{page.hasMore ? '+' : ''} rows</span>
+          <a href={`${base}/csv`} download={`${table.schema}.${table.name}.csv`}>Download CSV</a>
+          {isTable ? (
+            <>
+              <button onClick={() => setAdded([...added, {}])}>Add row</button>
+              <button disabled={!dirty} className={dirty ? 'unsaved' : ''} title={dirty ? 'Unsaved changes' : ''} onClick={save}>Save</button>
+              <button disabled={!dirty} onClick={reset}>Discard</button>
+              {meta && !editable && <span className="note">No primary key: append-only</span>}
+            </>
+          ) : (
+            <span className="note">View: read-only</span>
+          )}
+        </div>
+        {focus && (
+          <div className="fieldbar">
+            <label htmlFor="fieldbar">{focus.col} <span className="note">({focusKey})</span></label>
+            <textarea id="fieldbar" rows={2} value={focusValue ?? ''} placeholder={focusValue === null ? 'NULL' : ''}
+              onChange={(e) => setCell(focus, e.target.value)} />
+          </div>
         )}
       </div>
       {err && <div className="error">{err}</div>}
-      <table>
+      <table ref={tableRef} style={{ width: (isTable ? 28 : 0) + page.columns.reduce((n, c) => n + width(c), 0) }}>
+        <colgroup>
+          {isTable && <col style={{ width: 28 }} />}
+          {page.columns.map((c) => <col key={c} style={{ width: width(c) }} />)}
+        </colgroup>
         <thead>
           <tr>
-            {isTable && <th />}
-            {page.columns.map((c) => <th key={c} title={colMeta(c)?.type}>{c}</th>)}
+            {isTable && <th className="sticky" style={{ top: topH, left: 0 }} />}
+            {page.columns.map((c) => (
+              <th key={c} title={colMeta(c)?.type} className={cellClass(c, false)}
+                style={{ top: topH, left: pk.includes(c) ? stickyLeft(c) : undefined }}>
+                {c}
+                <div className="resizer" title="Drag to resize; double-click to fit content, again to fit label"
+                  onPointerDown={(e) => {
+                    e.preventDefault()
+                    e.currentTarget.setPointerCapture(e.pointerId)
+                    drag.current = { col: c, x: e.clientX, w: width(c) }
+                  }}
+                  onPointerMove={(e) => {
+                    const d = drag.current
+                    if (d) setWidths((w) => ({ ...w, [d.col]: Math.max(30, d.w + e.clientX - d.x) }))
+                  }}
+                  onPointerUp={() => { drag.current = null }}
+                  onDoubleClick={() => fit(c)} />
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
           {page.rows.map((row, i) => (
             <tr key={i} className={deleted.has(i) ? 'deleted' : ''}>
               {isTable && (
-                <td>{editable && <input type="checkbox" title="Delete" aria-label="Delete row" checked={deleted.has(i)} onChange={() => toggleDelete(i)} />}</td>
+                <td className="sticky" style={{ left: 0 }}>{editable && <input type="checkbox" title="Delete" aria-label="Delete row" checked={deleted.has(i)} onChange={() => toggleDelete(i)} />}</td>
               )}
               {row.map((v, j) => {
                 const col = page.columns[j]
-                const val = edits[i] && col in edits[i] ? edits[i][col] : cellToString(v)
+                const changed = !!edits[i] && col in edits[i]
+                const val = changed ? edits[i][col] : cellToString(v)
                 return (
-                  <td key={col}>
+                  <td key={col} className={cellClass(col, changed)} title={val ?? 'NULL'} style={pk.includes(col) ? { left: stickyLeft(col) } : undefined}>
                     {isReadonly(col) ? (
                       v === null ? <span className="null">NULL</span> : String(v)
                     ) : (
                       <input type="text" value={val ?? ''} placeholder={val === null ? 'NULL' : ''}
                         aria-label={col}
-                        onChange={(e) => edit(i, col, e.target.value)} />
+                        onFocus={() => setFocus({ i, col, added: false })}
+                        onChange={(e) => setCell({ i, col, added: false }, e.target.value)} />
                     )}
                   </td>
                 )
@@ -167,13 +303,14 @@ export function TableView({ srv, db, table, onDirty }: Props) {
           ))}
           {added.map((row, i) => (
             <tr key={`new${i}`} className="new">
-              <td><button title="Remove" aria-label="Remove new row" onClick={() => setAdded(added.filter((_, k) => k !== i))}>×</button></td>
+              <td className="sticky" style={{ left: 0 }}><button title="Remove" aria-label="Remove new row" onClick={() => { setFocus(null); setAdded(added.filter((_, k) => k !== i)) }}>×</button></td>
               {page.columns.map((col) => (
-                <td key={col}>
+                <td key={col} className={cellClass(col, false)} style={pk.includes(col) ? { left: stickyLeft(col) } : undefined}>
                   {canInsert(col) && (
                     <input type="text" value={row[col] ?? ''} placeholder="NULL"
                       aria-label={col}
-                      onChange={(e) => setAdded(added.map((r, k) => (k === i ? { ...r, [col]: normalize(col, e.target.value) } : r)))} />
+                      onFocus={() => setFocus({ i, col, added: true })}
+                      onChange={(e) => setCell({ i, col, added: true }, e.target.value)} />
                   )}
                 </td>
               ))}
@@ -181,7 +318,32 @@ export function TableView({ srv, db, table, onDirty }: Props) {
           ))}
         </tbody>
       </table>
-      <div ref={sentinel} className="note">{loading ? 'Loading…' : page.hasMore ? 'Scroll for more' : ''}</div>
+      <div ref={sentinel} className="note more">{loading ? 'Loading…' : page.hasMore ? 'Scroll for more' : ''}</div>
     </div>
   )
+}
+
+function setUrl(q: string, row: number) {
+  const p = new URLSearchParams()
+  if (q) p.set('q', q)
+  if (row > 0) p.set('row', String(row + 1))
+  const s = p.toString()
+  history.replaceState(null, '', location.pathname + (s ? `?${s}` : ''))
+}
+
+// Scrolls the enclosing <main> so that body row i sits just below the sticky toolbar and header.
+function scrollToRow(t: HTMLTableElement | null, i: number, topH: number) {
+  const tr = t?.tBodies[0].rows[i]
+  const main = t?.closest('main')
+  if (!t || !tr || !main) return
+  main.scrollTop += tr.getBoundingClientRect().top - main.getBoundingClientRect().top - topH - t.tHead!.offsetHeight
+}
+
+// Widest of texts in el's font (bold for headers), measured off-screen on a canvas.
+const canvas = document.createElement('canvas')
+function textWidth(el: Element, texts: string[], bold: boolean): number {
+  const ctx = canvas.getContext('2d')!
+  const st = getComputedStyle(el)
+  ctx.font = `${bold ? 'bold' : st.fontWeight} ${st.fontSize} ${st.fontFamily}`
+  return Math.ceil(Math.max(0, ...texts.map((t) => ctx.measureText(t).width)))
 }

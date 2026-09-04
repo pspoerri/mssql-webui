@@ -49,8 +49,12 @@ endpoint, or VPN).
 Pick a table in the tree; the URL (`/s/{server}/d/{db}/t/{schema}/{table}`)
 can be bookmarked or shared. Rows load 100 at a time as you scroll. The search
 box filters rows: a bare word matches any column, `col=value` matches one column
-exactly, and all terms must match (`turing id=2`); the query is kept in the URL
-as `?q=`. **Download CSV** streams the whole table.
+exactly, and all terms must match (`turing id=2`); the query and the scroll
+position are kept in the URL (`?q=...&row=250`), so a link opens at the same
+place. Drag a column header's right edge to resize it, double-click it to fit
+the content and again to fit the label. Key columns stay put when scrolling
+sideways, edited cells are highlighted, and the focused cell is mirrored in an
+editor above the table. **Download CSV** streams the whole table.
 
 Tables with a primary key are editable: change cells, tick rows to delete, or
 add rows. Nothing is written until **Save**, which applies every pending change

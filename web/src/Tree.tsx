@@ -38,6 +38,12 @@ export function Tree({ selected, onSelect }: Props) {
     if (selKey && !open[selKey]) load(selected!.srv, selected!.db)
   }, [selKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Reload the server's database list and the tables of every expanded database.
+  const refresh = (srv: string) => {
+    loadServers()
+    Object.keys(open).filter((k) => k.startsWith(`${srv}/`)).forEach((k) => load(srv, k.slice(srv.length + 1)))
+  }
+
   const toggle = (srv: string, db: string) => {
     const key = `${srv}/${db}`
     if (!open[key]) return load(srv, db)
@@ -72,6 +78,7 @@ export function Tree({ selected, onSelect }: Props) {
         {servers.map((s) => (
           <li key={s.name}>
             <b>{s.name}</b>
+            <button type="button" className="refresh" title="Refresh" aria-label={`Refresh ${s.name}`} onClick={() => refresh(s.name)}>↻</button>
             {s.error && <div className="error">{s.error}</div>}
             <ul>
               {s.databases.map(({ name: db, access }) => {

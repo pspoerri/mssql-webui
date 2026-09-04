@@ -85,7 +85,10 @@ function Help() {
         <li>Tables without a primary key are append-only; views are read-only.</li>
         <li><b>Download CSV</b> exports the whole table.</li>
         <li>The SQL console runs ad-hoc statements against the selected database.</li>
-        <li>The selected table is part of the URL, so it can be bookmarked or shared.</li>
+        <li>Drag a column header's right edge to resize it; double-click the edge to fit the content, double-click again to fit the label.
+          Key columns stay in place when scrolling sideways; edited cells are highlighted.</li>
+        <li>The focused cell is also shown in an editor above the table, handy for long values.</li>
+        <li>The selected table, search and scroll position are part of the URL, so a link can be bookmarked or shared.</li>
       </ul>
       <p>Source code, issues and documentation: <a href="https://github.com/pspoerri/mssql-webui" target="_blank" rel="noreferrer">github.com/pspoerri/mssql-webui</a></p>
     </div>
