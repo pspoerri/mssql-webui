@@ -56,7 +56,7 @@ cp .env.example .env   # fill in the values; make exports them
 make dev               # backend on :8080, Vite on :5173 (proxies /api and /auth)
 ```
 
-`make help` shows every target: `dev`, `build`, `test`, `docker`, `clean`.
+`make help` shows every target: `dev`, `build`, `test`, `image`, `run`, `clean`.
 
 ## Dev mode (no Entra)
 
@@ -83,14 +83,24 @@ make test    # go vet, go test, tsc
 make build   # ./db-webui with the UI embedded
 ```
 
-## Docker
+## Container image (Docker or Podman)
 
 ```bash
-make docker
-docker run -p 8080:8080 -e TENANT_ID=... -e CLIENT_ID=... -e CLIENT_SECRET=... \
-  -e REDIRECT_URL=https://host/auth/callback -e ALLOWED_GROUP_ID=... \
-  -e SQL_SERVERS='sqlserver://sql1.internal:1433?encrypt=true' db-webui
+make image                    # docker build -t db-webui .
+make image CONTAINER=podman   # or set CONTAINER=podman in .env
+make run                      # runs the image on :8080 with --env-file .env
 ```
+
+Without make:
+
+```bash
+podman build -t db-webui .
+podman run --rm -p 8080:8080 --env-file .env db-webui
+```
+
+On macOS, Podman needs a VM first: `podman machine init && podman machine start`.
+The Dockerfile uses fully qualified image names so Podman never asks which
+registry to pull from.
 
 ## Limits (by design, easy to add)
 
