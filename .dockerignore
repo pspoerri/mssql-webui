@@ -3,5 +3,5 @@
 .env
 web/node_modules
 backend/dist
-db-webui
+mssql-webui
 docs

@@ -20,7 +20,7 @@ export default function App() {
   return (
     <div className="app">
       <header>
-        <b>db-webui</b>
+        <b>mssql-webui</b>
         <span className="me">{me?.name}</span>
         <button onClick={logout}>Logout</button>
       </header>

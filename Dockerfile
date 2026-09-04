@@ -12,9 +12,9 @@ COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/*.go ./
 COPY --from=web /src/backend/dist ./dist
-RUN CGO_ENABLED=0 go build -o /db-webui .
+RUN CGO_ENABLED=0 go build -o /mssql-webui .
 
 FROM gcr.io/distroless/static-debian12
-COPY --from=build /db-webui /db-webui
+COPY --from=build /mssql-webui /mssql-webui
 EXPOSE 8080
-ENTRYPOINT ["/db-webui"]
+ENTRYPOINT ["/mssql-webui"]

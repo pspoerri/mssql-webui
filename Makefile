@@ -1,8 +1,8 @@
-# db-webui — run `make help` for targets.
+# mssql-webui — run `make help` for targets.
 -include .env
 export
 
-BIN := db-webui
+BIN := mssql-webui
 # docker or podman; override with `make image CONTAINER=podman` or CONTAINER=podman in .env
 CONTAINER ?= docker
 
@@ -22,7 +22,7 @@ dev-backend: ## Run the Go backend only
 dev-web: ## Run the Vite dev server only
 	cd web && pnpm install && pnpm dev
 
-build: ## Build the frontend and the single binary ./db-webui
+build: ## Build the frontend and the single binary ./mssql-webui
 	cd web && pnpm install && pnpm build
 	cd backend && go build -o ../$(BIN) .
 
@@ -30,7 +30,7 @@ test: ## go vet + go test, tsc typecheck
 	cd backend && go vet ./... && go test ./...
 	cd web && pnpm install && pnpm exec tsc -b
 
-image: ## Build the container image db-webui (CONTAINER=docker|podman)
+image: ## Build the container image mssql-webui (CONTAINER=docker|podman)
 	$(CONTAINER) build -t $(BIN) .
 
 run: ## Run the image on :8080 with the variables from .env

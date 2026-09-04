@@ -1,4 +1,4 @@
-module db-webui
+module mssql-webui
 
 go 1.27.0
 

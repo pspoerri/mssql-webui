@@ -1,4 +1,4 @@
-# db-webui design
+# mssql-webui design
 
 Date: 2026-09-04
 

@@ -1,4 +1,4 @@
-# db-webui Implementation Plan
+# mssql-webui Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -8,11 +8,11 @@
 
 **Tech Stack:** Go 1.27, `golang.org/x/oauth2` v0.36, `github.com/microsoft/go-mssqldb` v1.11; Vite 8 + React 19 + TypeScript 6, pnpm 11; Docker multi-stage build.
 
-**Spec:** `docs/superpowers/specs/2026-09-04-db-webui-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-04-mssql-webui-design.md`
 
 ## Global Constraints
 
-- Go module name `db-webui`, package `main`, four source files only: `main.go`, `auth.go`, `sql.go`, plus tests `sql_test.go`, `auth_test.go`.
+- Go module name `mssql-webui`, package `main`, four source files only: `main.go`, `auth.go`, `sql.go`, plus tests `sql_test.go`, `auth_test.go`.
 - Frontend lives in `web/`, built with `pnpm build` into `web/dist`, embedded with `//go:embed all:web/dist`.
 - No UI framework, no router, no grid library, no frontend tests.
 - Every SQL identifier goes through `quoteIdent`; every value is a bound `@pN` parameter.
@@ -75,7 +75,7 @@ export default defineConfig({
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>db-webui</title>
+    <title>mssql-webui</title>
   </head>
   <body>
     <div id="root"></div>
@@ -100,7 +100,7 @@ createRoot(document.getElementById('root')!).render(
 `web/src/App.tsx`:
 ```tsx
 export default function App() {
-  return <h1>db-webui</h1>
+  return <h1>mssql-webui</h1>
 }
 ```
 
@@ -118,7 +118,7 @@ dist/*
 
 Create root `.gitignore`:
 ```
-/db-webui
+/mssql-webui
 ```
 
 - [ ] **Step 6: Install and build**
@@ -148,10 +148,10 @@ git commit -m "Scaffold Vite React frontend with dev proxy"
 - [ ] **Step 1: Init the module and fetch dependencies**
 
 ```bash
-go mod init db-webui
+go mod init mssql-webui
 go get github.com/microsoft/go-mssqldb@v1.11.0 golang.org/x/oauth2@v0.36.0
 ```
-Expected: `go.mod` with `module db-webui`, `go 1.27`, both requires.
+Expected: `go.mod` with `module mssql-webui`, `go 1.27`, both requires.
 
 - [ ] **Step 2: Write main.go**
 
@@ -218,7 +218,7 @@ func spaHandler() http.HandlerFunc {
 - [ ] **Step 3: Build, vet, and smoke test**
 
 ```bash
-go vet ./... && go build -o db-webui . && (./db-webui & PID=$!; sleep 1; curl -s localhost:8080/ | head -3; curl -s localhost:8080/some/route | head -3; curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/assets/; kill $PID)
+go vet ./... && go build -o mssql-webui . && (./mssql-webui & PID=$!; sleep 1; curl -s localhost:8080/ | head -3; curl -s localhost:8080/some/route | head -3; curl -s -o /dev/null -w '%{http_code}\n' localhost:8080/assets/; kill $PID)
 ```
 Expected: both `curl`s print the `<!doctype html>` start of `index.html`; the third prints `200` or `301` (directory listing is acceptable). `go vet` prints nothing. Note the `go.mod` will list go-mssqldb and oauth2 as `// indirect` until Tasks 4 and 5 import them; that is fine.
 
@@ -404,7 +404,7 @@ func buildBatch(schema, table string, b batch) ([]stmt, error) {
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `go test ./... -run 'TestQuoteIdent|TestBuildBatch' -v`
-Expected: three PASS lines, `ok db-webui`.
+Expected: three PASS lines, `ok mssql-webui`.
 
 - [ ] **Step 5: Commit**
 
@@ -713,7 +713,7 @@ func main() {
 Run: `go mod tidy && go vet ./... && go test ./... -v -run 'TestParseAndCheckClaims'`
 Expected: PASS. Then a smoke test that the login redirect is built correctly:
 ```bash
-go build -o db-webui . && (TENANT_ID=t1 CLIENT_ID=cid CLIENT_SECRET=x REDIRECT_URL=http://localhost:8080/auth/callback ALLOWED_GROUP_ID=g1 ./db-webui & PID=$!; sleep 1; curl -s -i localhost:8080/auth/login | grep -i '^location\|^set-cookie'; curl -s localhost:8080/api/me; kill $PID)
+go build -o mssql-webui . && (TENANT_ID=t1 CLIENT_ID=cid CLIENT_SECRET=x REDIRECT_URL=http://localhost:8080/auth/callback ALLOWED_GROUP_ID=g1 ./mssql-webui & PID=$!; sleep 1; curl -s -i localhost:8080/auth/login | grep -i '^location\|^set-cookie'; curl -s localhost:8080/api/me; kill $PID)
 ```
 Expected: `Location: https://login.microsoftonline.com/t1/oauth2/v2.0/authorize?...client_id=cid...scope=openid+profile+offline_access+https%3A%2F%2Fdatabase.windows.net%2Fuser_impersonation&state=...`, a `Set-Cookie: oauth_state=...; Path=/auth; ... HttpOnly; SameSite=Lax` line, and `{"error":"not logged in"}` from `/api/me`.
 
@@ -1269,11 +1269,11 @@ func main() {
 - [ ] **Step 5: Run all tests and vet**
 
 Run: `go mod tidy && go vet ./... && go test ./... -v`
-Expected: all six tests PASS, `ok db-webui`. `go.mod` now lists go-mssqldb and oauth2 as direct requires.
+Expected: all six tests PASS, `ok mssql-webui`. `go.mod` now lists go-mssqldb and oauth2 as direct requires.
 
 Smoke test that routing and the 401 gate work without a SQL Server:
 ```bash
-go build -o db-webui . && (TENANT_ID=t1 CLIENT_ID=cid CLIENT_SECRET=x REDIRECT_URL=http://localhost:8080/auth/callback ALLOWED_GROUP_ID=g1 SQL_SERVERS='sqlserver://sql1.internal:1433?encrypt=true' ./db-webui & PID=$!; sleep 1; curl -s localhost:8080/api/servers; echo; curl -s -X POST localhost:8080/api/s/x/d/y/query -d '{"sql":"select 1"}'; echo; kill $PID)
+go build -o mssql-webui . && (TENANT_ID=t1 CLIENT_ID=cid CLIENT_SECRET=x REDIRECT_URL=http://localhost:8080/auth/callback ALLOWED_GROUP_ID=g1 SQL_SERVERS='sqlserver://sql1.internal:1433?encrypt=true' ./mssql-webui & PID=$!; sleep 1; curl -s localhost:8080/api/servers; echo; curl -s -X POST localhost:8080/api/s/x/d/y/query -d '{"sql":"select 1"}'; echo; kill $PID)
 ```
 Expected: `{"error":"not logged in"}` twice.
 
@@ -1656,7 +1656,7 @@ export default function App() {
   return (
     <div className="app">
       <header>
-        <b>db-webui</b>
+        <b>mssql-webui</b>
         <span className="me">{me?.name}</span>
         <button onClick={logout}>Logout</button>
       </header>
@@ -1686,9 +1686,9 @@ Expected: `tsc -b` silent, Vite prints `dist/index.html` and one JS asset, no wa
 
 Then confirm the Go binary picks up the new build:
 ```bash
-cd .. && go build -o db-webui . && (TENANT_ID=t1 CLIENT_ID=cid CLIENT_SECRET=x REDIRECT_URL=http://localhost:8080/auth/callback ALLOWED_GROUP_ID=g1 SQL_SERVERS='sqlserver://sql1.internal:1433' ./db-webui & PID=$!; sleep 1; curl -s localhost:8080/ | grep -o '<title>[^<]*</title>'; kill $PID)
+cd .. && go build -o mssql-webui . && (TENANT_ID=t1 CLIENT_ID=cid CLIENT_SECRET=x REDIRECT_URL=http://localhost:8080/auth/callback ALLOWED_GROUP_ID=g1 SQL_SERVERS='sqlserver://sql1.internal:1433' ./mssql-webui & PID=$!; sleep 1; curl -s localhost:8080/ | grep -o '<title>[^<]*</title>'; kill $PID)
 ```
-Expected: `<title>db-webui</title>`.
+Expected: `<title>mssql-webui</title>`.
 
 - [ ] **Step 8: Commit**
 
@@ -1725,12 +1725,12 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY *.go ./
 COPY --from=web /src/web/dist ./web/dist
-RUN CGO_ENABLED=0 go build -o /db-webui .
+RUN CGO_ENABLED=0 go build -o /mssql-webui .
 
 FROM gcr.io/distroless/static-debian12
-COPY --from=build /db-webui /db-webui
+COPY --from=build /mssql-webui /mssql-webui
 EXPOSE 8080
-ENTRYPOINT ["/db-webui"]
+ENTRYPOINT ["/mssql-webui"]
 ```
 
 `.dockerignore`:
@@ -1738,7 +1738,7 @@ ENTRYPOINT ["/db-webui"]
 .git
 web/node_modules
 web/dist
-db-webui
+mssql-webui
 docs
 ```
 
@@ -1746,7 +1746,7 @@ docs
 
 `README.md`:
 ````markdown
-# db-webui
+# mssql-webui
 
 Browse and edit MS SQL databases in the browser with your own Entra ID
 identity. One Go binary serves the API and the React UI; SQL connections
@@ -1802,16 +1802,16 @@ cd web && pnpm install && pnpm dev   # UI on :5173, proxies /api and /auth
 
 ```bash
 cd web && pnpm install && pnpm build && cd ..
-go build -o db-webui .
+go build -o mssql-webui .
 ```
 
 ## Docker
 
 ```bash
-docker build -t db-webui .
+docker build -t mssql-webui .
 docker run -p 8080:8080 -e TENANT_ID=... -e CLIENT_ID=... -e CLIENT_SECRET=... \
   -e REDIRECT_URL=https://host/auth/callback -e ALLOWED_GROUP_ID=... \
-  -e SQL_SERVERS='sqlserver://sql1.internal:1433?encrypt=true' db-webui
+  -e SQL_SERVERS='sqlserver://sql1.internal:1433?encrypt=true' mssql-webui
 ```
 
 ## Limits (by design, easy to add)
@@ -1823,13 +1823,13 @@ cell writes NULL. The console returns only the first result set.
 
 - [ ] **Step 3: Verify**
 
-Docker is not installed on this machine. If `docker --version` works where you are, run `docker build -t db-webui .` and expect a successful build with a final image around 20 MB. Otherwise, check the Dockerfile by hand against the repo: `web/pnpm-lock.yaml` exists, `*.go` matches all four Go files plus the two tests (tests compile into nothing in a build), and `go.sum` is committed. Say in the task report which of the two you did.
+Docker is not installed on this machine. If `docker --version` works where you are, run `docker build -t mssql-webui .` and expect a successful build with a final image around 20 MB. Otherwise, check the Dockerfile by hand against the repo: `web/pnpm-lock.yaml` exists, `*.go` matches all four Go files plus the two tests (tests compile into nothing in a build), and `go.sum` is committed. Say in the task report which of the two you did.
 
 Run the full local check one last time:
 ```bash
 go vet ./... && go test ./... && (cd web && pnpm build)
 ```
-Expected: `ok db-webui`, Vite build succeeds.
+Expected: `ok mssql-webui`, Vite build succeeds.
 
 - [ ] **Step 4: Commit**
 
@@ -1974,7 +1974,7 @@ Add `"database/sql/driver"` to the imports of `sql.go`. In `session.db`, replace
 - [ ] **Step 5: Run tests and vet**
 
 Run: `go vet ./... && go test ./... -v`
-Expected: all tests PASS including the three new ones, `ok db-webui`.
+Expected: all tests PASS including the three new ones, `ok mssql-webui`.
 
 - [ ] **Step 6: Document dev mode in the README**
 
@@ -2002,7 +2002,7 @@ Desktop. The Entra token path is the one thing dev mode does not exercise.
 
 The controller may hand you a `SQL_SERVERS` URL with a SQL login. If so, run:
 ```bash
-go build -o db-webui . && (DEV_USER=dev SQL_SERVERS='<url from controller>' ./db-webui & PID=$!; sleep 2
+go build -o mssql-webui . && (DEV_USER=dev SQL_SERVERS='<url from controller>' ./mssql-webui & PID=$!; sleep 2
 curl -s localhost:8080/api/me; echo
 curl -s localhost:8080/api/servers; echo
 kill $PID)

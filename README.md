@@ -1,4 +1,4 @@
-# db-webui
+# mssql-webui
 
 Browse and edit MS SQL databases in the browser with your own Entra ID
 identity. One Go binary serves the API and the React UI; SQL connections
@@ -80,13 +80,13 @@ Desktop. The Entra token path is the one thing dev mode does not exercise.
 
 ```bash
 make test    # go vet, go test, tsc
-make build   # ./db-webui with the UI embedded
+make build   # ./mssql-webui with the UI embedded
 ```
 
 ## Container image (Docker or Podman)
 
 ```bash
-make image                    # docker build -t db-webui .
+make image                    # docker build -t mssql-webui .
 make image CONTAINER=podman   # or set CONTAINER=podman in .env
 make run                      # runs the image on :8080 with --env-file .env
 ```
@@ -94,8 +94,8 @@ make run                      # runs the image on :8080 with --env-file .env
 Without make:
 
 ```bash
-podman build -t db-webui .
-podman run --rm -p 8080:8080 --env-file .env db-webui
+podman build -t mssql-webui .
+podman run --rm -p 8080:8080 --env-file .env mssql-webui
 ```
 
 On macOS, Podman needs a VM first: `podman machine init && podman machine start`.
