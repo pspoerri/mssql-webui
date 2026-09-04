@@ -105,7 +105,7 @@ export function TableView({ srv, db, table }: Props) {
           {page.rows.map((row, i) => (
             <tr key={i} className={deleted.has(i) ? 'deleted' : ''}>
               {editable && (
-                <td><input type="checkbox" title="Delete" checked={deleted.has(i)} onChange={() => toggleDelete(i)} /></td>
+                <td><input type="checkbox" title="Delete" aria-label="Delete row" checked={deleted.has(i)} onChange={() => toggleDelete(i)} /></td>
               )}
               {row.map((v, j) => {
                 const col = page.columns[j]
@@ -116,6 +116,7 @@ export function TableView({ srv, db, table }: Props) {
                       v === null ? <span className="null">NULL</span> : String(v)
                     ) : (
                       <input type="text" value={val ?? ''} placeholder={val === null ? 'NULL' : ''}
+                        aria-label={col}
                         onChange={(e) => edit(i, col, e.target.value)} />
                     )}
                   </td>
@@ -125,11 +126,12 @@ export function TableView({ srv, db, table }: Props) {
           ))}
           {added.map((row, i) => (
             <tr key={`new${i}`} className="new">
-              <td><button title="Remove" onClick={() => setAdded(added.filter((_, k) => k !== i))}>×</button></td>
+              <td><button title="Remove" aria-label="Remove new row" onClick={() => setAdded(added.filter((_, k) => k !== i))}>×</button></td>
               {page.columns.map((col) => (
                 <td key={col}>
                   {isReadonly(col) ? '' : (
                     <input type="text" value={row[col] ?? ''} placeholder="NULL"
+                      aria-label={col}
                       onChange={(e) => setAdded(added.map((r, k) => (k === i ? { ...r, [col]: normalize(col, e.target.value) } : r)))} />
                   )}
                 </td>

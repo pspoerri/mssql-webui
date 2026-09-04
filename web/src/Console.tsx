@@ -15,6 +15,7 @@ export function Console({ srv, db }: { srv: string; db: string }) {
     <div>
       <div className="toolbar"><b>{db}</b> SQL console</div>
       <textarea rows={8} value={sql} placeholder="SELECT TOP 100 * FROM ..."
+        aria-label="SQL"
         onChange={(e) => setSql(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) run() }} />
       <div className="toolbar"><button onClick={run}>Run</button><span className="note">Ctrl+Enter</span></div>

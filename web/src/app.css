@@ -5,9 +5,9 @@ header .me { margin-left: auto; color: #666; }
 nav { overflow: auto; border-right: 1px solid #ddd; padding: .5rem; }
 nav ul { list-style: none; padding-left: 1rem; margin: 0; }
 nav > ul { padding-left: 0; }
-nav a { cursor: pointer; display: block; padding: 2px 4px; border-radius: 3px; }
-nav a:hover { background: #f0f0f0; }
-nav a.selected { background: #dde8ff; }
+nav a, nav button { cursor: pointer; display: block; width: 100%; text-align: left; background: none; border: none; font: inherit; color: inherit; padding: 2px 4px; border-radius: 3px; }
+nav a:hover, nav button:hover { background: #f0f0f0; }
+nav a.selected, nav button.selected { background: #dde8ff; }
 nav .kind { color: #999; font-size: 11px; margin-left: 4px; }
 main { overflow: auto; padding: 1rem; }
 .toolbar { display: flex; gap: .5rem; align-items: center; margin-bottom: .5rem; }

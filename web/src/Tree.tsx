@@ -15,14 +15,16 @@ export function Tree({ selected, onSelect }: Props) {
   const toggle = async (srv: string, db: string) => {
     const key = `${srv}/${db}`
     if (open[key]) {
-      const next = { ...open }
-      delete next[key]
-      setOpen(next)
+      setOpen((o) => {
+        const next = { ...o }
+        delete next[key]
+        return next
+      })
       return
     }
     try {
       const tables = await api<TableInfo[]>(`/api/s/${enc(srv)}/d/${enc(db)}/tables`)
-      setOpen({ ...open, [key]: tables })
+      setOpen((o) => ({ ...o, [key]: tables }))
       setErr('')
     } catch (e) {
       setErr((e as Error).message)
@@ -44,19 +46,19 @@ export function Tree({ selected, onSelect }: Props) {
             <ul>
               {s.databases.map((db) => (
                 <li key={db}>
-                  <a onClick={() => toggle(s.name, db)}>{open[`${s.name}/${db}`] ? '▾' : '▸'} {db}</a>
+                  <button type="button" onClick={() => toggle(s.name, db)}>{open[`${s.name}/${db}`] ? '▾' : '▸'} {db}</button>
                   {open[`${s.name}/${db}`] && (
                     <ul>
                       <li>
-                        <a className={isSel(s.name, db, undefined, true) ? 'selected' : ''}
-                          onClick={() => onSelect({ srv: s.name, db, console: true })}>SQL console</a>
+                        <button type="button" className={isSel(s.name, db, undefined, true) ? 'selected' : ''}
+                          onClick={() => onSelect({ srv: s.name, db, console: true })}>SQL console</button>
                       </li>
                       {open[`${s.name}/${db}`].map((t) => (
                         <li key={`${t.schema}.${t.name}`}>
-                          <a className={isSel(s.name, db, t) ? 'selected' : ''}
+                          <button type="button" className={isSel(s.name, db, t) ? 'selected' : ''}
                             onClick={() => onSelect({ srv: s.name, db, table: t })}>
                             {t.schema}.{t.name}{t.kind === 'view' && <span className="kind">view</span>}
-                          </a>
+                          </button>
                         </li>
                       ))}
                     </ul>
