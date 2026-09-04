@@ -31,7 +31,8 @@ Out (add when needed):
 main.go        server, routes, static serving (embeds web/dist)
 auth.go        login/callback/logout, session store, token refresh, middleware
 sql.go         per-user connectors, schema/rows/query handlers, SQL builders
-sql_test.go    quoteIdent + edit-batch SQL builder tests
+sql_test.go    quoteIdent, edit-batch builder, server URL parsing, value encoding tests
+auth_test.go   ID token claim parsing and group check tests
 web/           Vite + React + TypeScript, pnpm
 Dockerfile     node build stage -> go build stage -> distroless runtime
 README.md      app registration steps, env vars, network requirement
@@ -101,9 +102,9 @@ valid token. Per-database connections (not `USE`) so Azure SQL Database works.
 | `GET /api/servers` | `[{name, databases: [..], error?}]`; databases from `sys.databases` on `master`; a permission error yields `databases: []` plus `error` |
 | `GET /api/s/{srv}/d/{db}/tables` | `[{schema, name, kind: "table"\|"view"}]` |
 | `GET /api/s/{srv}/d/{db}/t/{schema}/{table}` | `{columns: [{name, type, nullable, identity, readonly}], pk: [..]}` |
-| `GET .../t/{schema}/{table}/rows?offset=&limit=` | `{rows: [[..]], total}`; ordered by PK (or all columns if none); limit capped at 500 |
+| `GET .../t/{schema}/{table}/rows?offset=&limit=` | `{columns, rows: [[..]], hasMore}`; ordered by PK (`ORDER BY (SELECT NULL)` if none); limit default 100, capped at 500; `hasMore` comes from fetching limit+1 rows, no COUNT |
 | `POST .../t/{schema}/{table}/rows` | body `{inserts: [{col: val}], updates: [{key: {pk: val}, set: {col: val}}], deletes: [{pk: val}]}`; one transaction; `{ok: true}` or `{error}` |
-| `POST /api/s/{srv}/d/{db}/query` | body `{sql}`; `{columns, rows}` for the first result set (cap 1000 rows) or `{rowsAffected}` |
+| `POST /api/s/{srv}/d/{db}/query` | body `{sql}`; statements starting with SELECT/WITH run as a query and return `{columns, rows}` (first result set, cap 1000 rows); anything else runs as exec and returns `{rowsAffected}` |
 
 ### Editing rules
 
@@ -113,14 +114,17 @@ valid token. Per-database connections (not `USE`) so Azure SQL Database works.
 - All identifiers pass through `quoteIdent` (`[name]`, `]` doubled). All
   values are bound parameters.
 - Cell values travel as JSON strings or `null`; SQL Server implicit conversion
-  handles numerics, dates, bits. `ponytail:` typed conversion if a type bites.
+  handles numerics, dates, bits. In the grid, clearing a cell of a nullable
+  column sends `null`, of a non-nullable column sends `""`. `ponytail:` typed
+  conversion and an explicit NULL toggle if a type bites.
 - Last write wins. `ponytail:` add a rowversion check if concurrent edits matter.
 
 ### Errors
 
 SQL errors → 400 `{error: "<server message>"}`. Unknown server/db/table → 404.
-Session missing or token refresh failed → 401. Everything else → 500 with a
-generic message; details logged.
+Session missing or token refresh failed → 401. Everything else (network,
+connect) → 500 `{error: message}`; the message is shown since users need it to
+debug reachability, and only group members ever see it.
 
 ## Frontend
 
@@ -145,13 +149,17 @@ Build: `pnpm build` → `web/dist`, embedded with `//go:embed`; Go serves
 ## Docker
 
 ```
-FROM node:22-alpine AS web    # corepack pnpm, pnpm install --frozen-lockfile, pnpm build
-FROM golang:1.23 AS build     # copy web/dist from web stage, CGO_ENABLED=0 go build
+FROM node:22-alpine AS web    # npm i -g pnpm@11, pnpm install --frozen-lockfile, pnpm build
+FROM golang:1.27-alpine AS build  # copy web/dist from web stage, CGO_ENABLED=0 go build
 FROM gcr.io/distroless/static # copy binary, EXPOSE 8080, ENTRYPOINT
 ```
 
 ## Testing
 
-`sql_test.go`: `quoteIdent` (plain, with `]`), and the edit-batch builder
-(one insert, one update, one delete → expected SQL text and parameter order).
-`go vet` and `tsc --noEmit` cover the rest. No frontend tests.
+`sql_test.go`: `quoteIdent` (with `]`), the edit-batch builder (one insert,
+one update, one delete → expected SQL text and parameter order; empty key
+rejected), `parseServers`, and `jsonValue` (decimal, GUID, binary).
+`auth_test.go`: `parseIDToken` + `checkClaims` (member, non-member, wrong
+audience, malformed token). `go vet` and `tsc -b` cover the rest. No frontend
+tests. No SQL Server integration test: Entra token auth cannot be exercised
+against a local container.
