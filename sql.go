@@ -301,10 +301,13 @@ type columnInfo struct {
 	Readonly bool   `json:"readonly"`
 }
 
-// Base types the grid never writes: binary blobs, rowversion, CLR types.
+// Base type names the grid never writes: binary blobs, rowversion, CLR
+// types. CLR types (hierarchyid, geometry, geography, user CLR types) have
+// no system_type_id row in sys.types, so the query falls back to their user
+// type name for this check.
 var readonlyTypes = map[string]bool{
 	"binary": true, "varbinary": true, "image": true, "timestamp": true,
-	"hierarchyid": true, "sql_variant": true,
+	"hierarchyid": true, "sql_variant": true, "geometry": true, "geography": true,
 }
 
 func primaryKey(ctx context.Context, db *sql.DB, obj string) ([]string, error) {
@@ -338,7 +341,8 @@ func handleColumns(w http.ResponseWriter, r *http.Request, s *session) {
 		return
 	}
 	obj := objName(r)
-	rows, err := db.QueryContext(r.Context(), `SELECT c.name, TYPE_NAME(c.user_type_id), TYPE_NAME(c.system_type_id),
+	rows, err := db.QueryContext(r.Context(), `SELECT c.name, COALESCE(TYPE_NAME(c.user_type_id), ''),
+		COALESCE(TYPE_NAME(c.system_type_id), TYPE_NAME(c.user_type_id), ''),
 		c.is_nullable, c.is_identity, c.is_computed
 		FROM sys.columns c WHERE c.object_id = OBJECT_ID(@p1) ORDER BY c.column_id`, obj)
 	if err != nil {
