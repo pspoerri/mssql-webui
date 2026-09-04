@@ -52,6 +52,7 @@ router, or grid library.
 | `ALLOWED_GROUP_ID` | object ID of the Entra group allowed to use the app |
 | `SQL_SERVERS` | comma-separated go-mssqldb URLs without credentials, e.g. `sqlserver://sql1.internal:1433?encrypt=true,sqlserver://sql2:1433?trustservercertificate=true`. Display name = host. |
 | `LISTEN_ADDR` | default `:8080` |
+| `DEV_USER` | dev only: skip Entra, run every request as this name, connect with the SQL login in each `SQL_SERVERS` URL |
 
 Entra app registration requirements (documented in README):
 - Platform: Web, redirect URI = `REDIRECT_URL`, client secret.
@@ -85,6 +86,15 @@ SQL Database, Managed Instance, and Arc-enabled SQL Server 2022+.
 
 Token refresh is handled by `oauth2.TokenSource`; a refresh failure surfaces
 as 401 from the API, which sends the user back through login.
+
+## Dev mode
+
+With `DEV_USER` set, `initAuth` creates one fixed session and skips the Entra
+config; `withSession` serves that session to every request; `session.db`
+uses `mssql.NewConnectorConfig` (SQL login from the URL) instead of the token
+connector. `/auth/login` and `/auth/callback` are not registered. Lets the
+schema browser, grid, and console be exercised against a local SQL Server in
+Docker. Anyone reaching the port is that user: never set in production.
 
 ## SQL access
 
