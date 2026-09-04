@@ -39,3 +39,38 @@ func TestBuildBatchRejectsEmptyKey(t *testing.T) {
 		t.Fatal("update without key accepted")
 	}
 }
+
+func TestParseServers(t *testing.T) {
+	m, names, err := parseServers("sqlserver://a.internal:1433?encrypt=true, sqlserver://b?trustservercertificate=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(names, []string{"a.internal", "b"}) {
+		t.Fatalf("names %v", names)
+	}
+	if m["a.internal"].Port != 1433 || m["b"].Host != "b" {
+		t.Fatalf("configs %+v", m)
+	}
+	if _, _, err := parseServers(""); err == nil {
+		t.Fatal("empty list accepted")
+	}
+}
+
+func TestJSONValue(t *testing.T) {
+	if got := jsonValue([]byte("12.50"), "DECIMAL"); got != "12.50" {
+		t.Fatalf("decimal: %v", got)
+	}
+	guid := []byte{0x33, 0x22, 0x11, 0x00, 0x55, 0x44, 0x77, 0x66, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF}
+	if got := jsonValue(guid, "UNIQUEIDENTIFIER"); got != "00112233-4455-6677-8899-AABBCCDDEEFF" {
+		t.Fatalf("guid: %v", got)
+	}
+	if got := jsonValue([]byte{1, 2}, "VARBINARY"); got != "AQI=" {
+		t.Fatalf("binary: %v", got)
+	}
+	if got := jsonValue(int64(3), "INT"); got != int64(3) {
+		t.Fatalf("int: %v", got)
+	}
+	if got := jsonValue(nil, "INT"); got != nil {
+		t.Fatalf("nil: %v", got)
+	}
+}

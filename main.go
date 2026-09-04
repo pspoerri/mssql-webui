@@ -29,8 +29,10 @@ func mustEnv(key string) string {
 
 func main() {
 	initAuth()
+	initSQL()
 	mux := http.NewServeMux()
 	registerAuth(mux)
+	registerAPI(mux)
 	mux.HandleFunc("/", spaHandler())
 	addr := env("LISTEN_ADDR", ":8080")
 	log.Printf("listening on %s", addr)
