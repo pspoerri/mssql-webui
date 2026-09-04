@@ -1,7 +1,11 @@
 body { margin: 0; font: 14px system-ui, sans-serif; color: #222; }
-.app { display: grid; grid-template-columns: 280px 1fr; grid-template-rows: auto 1fr; height: 100vh; }
+.app { display: grid; grid-template-columns: 280px 1fr; grid-template-rows: auto 1fr auto; height: 100vh; }
 header { grid-column: 1 / -1; display: flex; gap: 1rem; align-items: center; padding: .5rem 1rem; border-bottom: 1px solid #ddd; }
 header .me { margin-left: auto; color: #666; }
+footer { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 1rem; padding: .25rem 1rem; border-top: 1px solid #ddd; font-size: 12px; color: #666; }
+footer .unsaved { color: #2563eb; font-weight: bold; }
+footer a { color: inherit; }
+.help { max-width: 40em; line-height: 1.5; }
 nav { overflow: auto; border-right: 1px solid #ddd; padding: .5rem; display: flex; flex-direction: column; }
 nav .toggle { margin-top: auto; padding-top: .5rem; color: #666; font-size: 12px; }
 nav ul { list-style: none; padding-left: 1rem; margin: 0; }
@@ -16,6 +20,7 @@ nav .noaccess { color: #aaa; }
 main { overflow: auto; padding: 1rem; }
 .toolbar { display: flex; gap: .5rem; align-items: center; margin-bottom: .5rem; }
 .toolbar .note { color: #666; }
+.toolbar button.unsaved { background: #2563eb; color: #fff; border-color: #1d4ed8; font-weight: bold; }
 table { border-collapse: collapse; font-size: 13px; }
 th, td { border: 1px solid #ddd; padding: 2px 6px; text-align: left; white-space: nowrap; }
 th { background: #f7f7f7; position: sticky; top: 0; }

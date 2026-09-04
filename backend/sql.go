@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/base64"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -266,6 +268,7 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/s/{srv}/d/{db}/schemas", withSession(handleCreateSchema))
 	mux.HandleFunc("GET /api/s/{srv}/d/{db}/t/{schema}/{table}", withSession(handleColumns))
 	mux.HandleFunc("GET /api/s/{srv}/d/{db}/t/{schema}/{table}/rows", withSession(handleRows))
+	mux.HandleFunc("GET /api/s/{srv}/d/{db}/t/{schema}/{table}/csv", withSession(handleCSV))
 	mux.HandleFunc("POST /api/s/{srv}/d/{db}/t/{schema}/{table}/rows", withSession(handleBatch))
 	mux.HandleFunc("POST /api/s/{srv}/d/{db}/query", withSession(handleQuery))
 }
@@ -537,6 +540,73 @@ func readRows(rows *sql.Rows, max int) ([]string, [][]any, error) {
 	return cols, out, rows.Err()
 }
 
+// Column types free-text search can CAST to nvarchar; anything else (binary,
+// CLR, sql_variant) is only reachable through col=value.
+var searchableTypes = map[string]bool{
+	"CHAR": true, "NCHAR": true, "VARCHAR": true, "NVARCHAR": true, "TEXT": true, "NTEXT": true, "XML": true,
+	"TINYINT": true, "SMALLINT": true, "INT": true, "BIGINT": true, "DECIMAL": true, "MONEY": true, "SMALLMONEY": true,
+	"FLOAT": true, "REAL": true, "BIT": true, "UNIQUEIDENTIFIER": true,
+	"DATE": true, "DATETIME": true, "DATETIME2": true, "SMALLDATETIME": true, "DATETIMEOFFSET": true, "TIME": true,
+}
+
+// searchWhere turns "alan id=3" into a WHERE clause: a bare word matches any
+// searchable column (LIKE %word%), col=value matches that column exactly;
+// terms are ANDed. Placeholders start at @p1.
+// ponytail: terms split on whitespace, so a value cannot contain spaces; add quoting if needed.
+func searchWhere(cols, types []string, q string) (string, []any, error) {
+	var conds []string
+	var args []any
+	for _, term := range strings.Fields(q) {
+		if col, val, ok := strings.Cut(term, "="); ok && col != "" {
+			i := slices.IndexFunc(cols, func(c string) bool { return strings.EqualFold(c, col) })
+			if i < 0 {
+				return "", nil, fmt.Errorf("unknown column %q", col)
+			}
+			args = append(args, val)
+			conds = append(conds, fmt.Sprintf("%s = @p%d", quoteIdent(cols[i]), len(args)))
+			continue
+		}
+		var ors []string
+		args = append(args, "%"+likeEscape(term)+"%")
+		for i, c := range cols {
+			if searchableTypes[types[i]] {
+				ors = append(ors, fmt.Sprintf("CAST(%s AS nvarchar(max)) LIKE @p%d ESCAPE '\\'", quoteIdent(c), len(args)))
+			}
+		}
+		if len(ors) == 0 {
+			return "", nil, errors.New("no searchable columns; use col=value")
+		}
+		conds = append(conds, "("+strings.Join(ors, " OR ")+")")
+	}
+	if len(conds) == 0 {
+		return "", nil, nil
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args, nil
+}
+
+func likeEscape(s string) string {
+	return strings.NewReplacer(`\`, `\\`, "%", `\%`, "_", `\_`, "[", `\[`).Replace(s)
+}
+
+// columnTypes returns the column names and driver type names of obj without reading rows.
+func columnTypes(ctx context.Context, db *sql.DB, obj string) ([]string, []string, error) {
+	rows, err := db.QueryContext(ctx, "SELECT TOP 0 * FROM "+obj)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	types, err := rows.ColumnTypes()
+	if err != nil {
+		return nil, nil, err
+	}
+	names := make([]string, len(types))
+	tn := make([]string, len(types))
+	for i, t := range types {
+		names[i], tn[i] = t.Name(), t.DatabaseTypeName()
+	}
+	return names, tn, nil
+}
+
 func handleRows(w http.ResponseWriter, r *http.Request, s *session) {
 	db, err := s.db(r.Context(), r.PathValue("srv"), r.PathValue("db"))
 	if err != nil {
@@ -568,9 +638,23 @@ func handleRows(w http.ResponseWriter, r *http.Request, s *session) {
 		}
 		order = strings.Join(q, ", ")
 	}
+	var where string
+	var args []any
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		cols, types, err := columnTypes(r.Context(), db, obj)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		if where, args, err = searchWhere(cols, types, q); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+	}
+	args = append(args, offset, limit+1)
 	rows, err := db.QueryContext(r.Context(),
-		fmt.Sprintf("SELECT * FROM %s ORDER BY %s OFFSET @p1 ROWS FETCH NEXT @p2 ROWS ONLY", obj, order),
-		offset, limit+1)
+		fmt.Sprintf("SELECT * FROM %s%s ORDER BY %s OFFSET @p%d ROWS FETCH NEXT @p%d ROWS ONLY", obj, where, order, len(args)-1, len(args)),
+		args...)
 	if err != nil {
 		fail(w, err)
 		return
@@ -586,6 +670,73 @@ func handleRows(w http.ResponseWriter, r *http.Request, s *session) {
 		data = data[:limit]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"columns": cols, "rows": data, "hasMore": hasMore})
+}
+
+// handleCSV streams the whole table or view as a CSV download.
+// ponytail: NULL becomes an empty field; add a quoting convention if someone needs to tell "" and NULL apart.
+func handleCSV(w http.ResponseWriter, r *http.Request, s *session) {
+	db, err := s.db(r.Context(), r.PathValue("srv"), r.PathValue("db"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	rows, err := db.QueryContext(r.Context(), "SELECT * FROM "+objName(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	types, err := rows.ColumnTypes()
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", r.PathValue("schema")+"."+r.PathValue("table")+".csv"))
+	cw := csv.NewWriter(w)
+	cw.Write(cols)
+	vals := make([]any, len(cols))
+	ptrs := make([]any, len(cols))
+	rec := make([]string, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	abort := func(err error) {
+		// Headers are already out; abort the connection so the browser reports a failed download instead of a truncated file.
+		log.Printf("csv %s: %v", objName(r), err)
+		panic(http.ErrAbortHandler)
+	}
+	for rows.Next() {
+		if err := rows.Scan(ptrs...); err != nil {
+			abort(err)
+		}
+		for i, v := range vals {
+			rec[i] = csvString(jsonValue(v, types[i].DatabaseTypeName()))
+		}
+		cw.Write(rec)
+	}
+	if err := rows.Err(); err != nil {
+		abort(err)
+	}
+	cw.Flush()
+}
+
+func csvString(v any) string {
+	switch v := v.(type) {
+	case nil:
+		return ""
+	case time.Time:
+		return v.Format(time.RFC3339Nano)
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	default:
+		return fmt.Sprint(v)
+	}
 }
 
 // handleBatch applies inserts/updates/deletes in one transaction.

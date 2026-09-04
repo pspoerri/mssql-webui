@@ -3,6 +3,8 @@
 export
 
 BIN := mssql-webui
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -X main.version=$(VERSION)
 # docker or podman; auto-detected, override with `make image CONTAINER=podman` or CONTAINER=podman in .env
 CONTAINER ?= $(shell command -v docker >/dev/null 2>&1 && echo docker || echo podman)
 # sa password for `make run-sqlserver`
@@ -19,21 +21,21 @@ dev: ## Run backend (:8080) and Vite dev server (:5173) together; reads .env
 	@$(MAKE) -j2 dev-backend dev-web
 
 dev-backend: ## Run the Go backend only
-	cd backend && go run .
+	cd backend && go run -ldflags "$(LDFLAGS)" .
 
 dev-web: ## Run the Vite dev server only
 	cd web && pnpm install && pnpm dev
 
 build: ## Build the frontend and the single binary ./mssql-webui
 	cd web && pnpm install && pnpm build
-	cd backend && go build -o ../$(BIN) .
+	cd backend && go build -ldflags "$(LDFLAGS)" -o ../$(BIN) .
 
 test: ## go vet + go test, tsc typecheck
 	cd backend && go vet ./... && go test ./...
 	cd web && pnpm install && pnpm exec tsc -b
 
 image: ## Build the container image mssql-webui (CONTAINER=docker|podman)
-	$(CONTAINER) build -t $(BIN) .
+	$(CONTAINER) build --build-arg VERSION=$(VERSION) -t $(BIN) .
 
 run: ## Run the image on :8080 with the variables from .env
 	$(CONTAINER) run --rm -p 8080:8080 --env-file .env $(BIN)

@@ -144,7 +144,7 @@ func registerAuth(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("POST /auth/logout", handleLogout)
 	mux.HandleFunc("GET /api/me", withSession(func(w http.ResponseWriter, r *http.Request, s *session) {
-		writeJSON(w, http.StatusOK, map[string]string{"name": s.Name, "email": s.Email})
+		writeJSON(w, http.StatusOK, map[string]string{"name": s.Name, "email": s.Email, "version": version})
 	}))
 }
 

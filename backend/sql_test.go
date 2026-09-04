@@ -182,3 +182,28 @@ func TestFailStatusCodes(t *testing.T) {
 		})
 	}
 }
+
+func TestSearchWhere(t *testing.T) {
+	cols := []string{"id", "name", "photo"}
+	types := []string{"INT", "NVARCHAR", "VARBINARY"}
+	where, args, err := searchWhere(cols, types, "al%an ID=3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ` WHERE (CAST([id] AS nvarchar(max)) LIKE @p1 ESCAPE '\' OR CAST([name] AS nvarchar(max)) LIKE @p1 ESCAPE '\') AND [id] = @p2`
+	if where != want {
+		t.Fatalf("got  %s\nwant %s", where, want)
+	}
+	if !reflect.DeepEqual(args, []any{`%al\%an%`, "3"}) {
+		t.Fatalf("args %#v", args)
+	}
+	if where, args, err := searchWhere(cols, types, "  "); where != "" || args != nil || err != nil {
+		t.Fatalf("blank: %q %v %v", where, args, err)
+	}
+	if _, _, err := searchWhere(cols, types, "nope=1"); err == nil {
+		t.Fatal("unknown column accepted")
+	}
+	if _, _, err := searchWhere([]string{"photo"}, []string{"VARBINARY"}, "x"); err == nil {
+		t.Fatal("free text over unsearchable columns accepted")
+	}
+}

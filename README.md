@@ -44,6 +44,21 @@ while it resumes.
 The process needs TCP reachability to every server (peered VNet, private
 endpoint, or VPN).
 
+## Using it
+
+Pick a table in the tree; the URL (`/s/{server}/d/{db}/t/{schema}/{table}`)
+can be bookmarked or shared. Rows load 100 at a time as you scroll. The search
+box filters rows: a bare word matches any column, `col=value` matches one column
+exactly, and all terms must match (`turing id=2`); the query is kept in the URL
+as `?q=`. **Download CSV** streams the whole table.
+
+Tables with a primary key are editable: change cells, tick rows to delete, or
+add rows. Nothing is written until **Save**, which applies every pending change
+in one transaction (all or nothing). Tables without a primary key are
+append-only, views are read-only. The Save button and the footer status
+highlight unsaved changes, and leaving the page or the table asks first.
+The footer shows the build version (`git describe`) and links to Help.
+
 ## Layout
 
 ```
@@ -86,7 +101,7 @@ The Entra token path is the one thing dev mode does not exercise.
 
 ```bash
 make test    # go vet, go test, tsc
-make build   # ./mssql-webui with the UI embedded
+make build   # ./mssql-webui with the UI embedded; version from git describe (VERSION=... to override)
 ```
 
 ## Container image (Docker or Podman)
@@ -112,4 +127,6 @@ registry to pull from.
 
 Sessions live in memory (single instance) and expire 12 hours after login. Edits are last-write-wins. Cell
 values are sent as strings and converted by SQL Server. Clearing a nullable
-cell writes NULL. The console returns only the first result set.
+cell writes NULL. The console returns only the first result set. Free-text
+search casts every column to nvarchar (a table scan); `col=value` can use an
+index. CSV export writes NULL as an empty field.

@@ -1,18 +1,45 @@
 import { useEffect, useState } from 'react'
-import { api, type Selection } from './api'
+import { api, fromPath, toPath, type Selection } from './api'
 import { Console } from './Console'
 import { TableView } from './TableView'
 import { Tree } from './Tree'
 
+type Me = { name: string; email: string; version: string }
+
 export default function App() {
-  const [me, setMe] = useState<{ name: string; email: string } | null>(null)
-  const [sel, setSel] = useState<Selection | null>(null)
+  const [me, setMe] = useState<Me | null>(null)
+  const [path, setPath] = useState(location.pathname)
+  const [dirty, setDirty] = useState(false)
+  const sel = fromPath(path)
 
   useEffect(() => {
-    api<{ name: string; email: string }>('/api/me').then(setMe).catch(() => {})
+    api<Me>('/api/me').then(setMe).catch(() => {})
   }, [])
 
+  // Unsaved table edits: warn before leaving the page, and confirm before
+  // navigating within the app or logging out.
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
+  const guard = () => !dirty || confirm('You have unsaved changes. Discard them?')
+
+  const nav = (p: string) => {
+    if (p === path || !guard()) return
+    history.pushState(null, '', p)
+    setPath(p)
+  }
+  useEffect(() => {
+    // ponytail: a declined back/forward re-pushes the current path instead of tracking history depth
+    const onPop = () => (guard() ? setPath(location.pathname) : history.pushState(null, '', path))
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [dirty, path]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const logout = async () => {
+    if (!guard()) return
     await fetch('/auth/logout', { method: 'POST' })
     window.location.href = '/auth/login'
   }
@@ -24,16 +51,43 @@ export default function App() {
         <span className="me">{me?.name}</span>
         <button onClick={logout}>Logout</button>
       </header>
-      <Tree selected={sel} onSelect={setSel} />
+      <Tree selected={sel} onSelect={(s: Selection) => nav(toPath(s))} />
       <main>
-        {sel?.console ? (
+        {path === '/help' ? (
+          <Help />
+        ) : sel?.console ? (
           <Console key={`${sel.srv}/${sel.db}`} srv={sel.srv} db={sel.db} />
         ) : sel?.table ? (
-          <TableView key={`${sel.srv}/${sel.db}/${sel.table.schema}/${sel.table.name}`} srv={sel.srv} db={sel.db} table={sel.table} />
+          <TableView key={path} srv={sel.srv} db={sel.db} table={sel.table} onDirty={setDirty} />
         ) : (
           <p>Select a table.</p>
         )}
       </main>
+      <footer>
+        <span className={dirty ? 'unsaved' : ''}>{dirty ? 'Unsaved changes' : 'All changes saved'}</span>
+        <a href="/help" onClick={(e) => { e.preventDefault(); nav('/help') }}>Help</a>
+        <span className="version">{me?.version}</span>
+      </footer>
+    </div>
+  )
+}
+
+function Help() {
+  return (
+    <div className="help">
+      <h2>Help</h2>
+      <ul>
+        <li>Expand a database in the tree and pick a table; more rows load as you scroll.</li>
+        <li>Search filters rows: a bare word matches any column, <code>col=value</code> matches one column exactly, all terms must match.</li>
+        <li>Tables with a primary key are editable: change cells, tick rows to delete, or add rows.
+          Nothing is written until you press <b>Save</b>, which applies all pending changes in one transaction.
+          Leaving the table with unsaved changes asks for confirmation.</li>
+        <li>Tables without a primary key are append-only; views are read-only.</li>
+        <li><b>Download CSV</b> exports the whole table.</li>
+        <li>The SQL console runs ad-hoc statements against the selected database.</li>
+        <li>The selected table is part of the URL, so it can be bookmarked or shared.</li>
+      </ul>
+      <p>Source code, issues and documentation: <a href="https://github.com/pspoerri/mssql-webui" target="_blank" rel="noreferrer">github.com/pspoerri/mssql-webui</a></p>
     </div>
   )
 }

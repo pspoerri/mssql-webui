@@ -32,6 +32,12 @@ export function Tree({ selected, onSelect }: Props) {
     }
   }
 
+  // Deep link: expand the database of the current selection so it is visible.
+  const selKey = selected ? `${selected.srv}/${selected.db}` : ''
+  useEffect(() => {
+    if (selKey && !open[selKey]) load(selected!.srv, selected!.db)
+  }, [selKey]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const toggle = (srv: string, db: string) => {
     const key = `${srv}/${db}`
     if (!open[key]) return load(srv, db)

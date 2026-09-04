@@ -13,6 +13,9 @@ import (
 //go:embed all:dist
 var webFS embed.FS
 
+// version is set at build time: -ldflags "-X main.version=$(git describe --tags --always --dirty)".
+var version = "dev"
+
 func env(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -34,7 +37,11 @@ func main() {
 	mux := http.NewServeMux()
 	registerAuth(mux)
 	registerAPI(mux)
-	mux.HandleFunc("/", spaHandler())
+	dist, err := fs.Sub(webFS, "dist")
+	if err != nil {
+		log.Fatal(err)
+	}
+	mux.HandleFunc("/", spaHandler(dist))
 	defaultAddr := ":8080"
 	if devSession != nil {
 		defaultAddr = "127.0.0.1:8080"
@@ -44,12 +51,9 @@ func main() {
 	log.Fatal((&http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}).ListenAndServe())
 }
 
-// spaHandler serves web/dist and falls back to index.html for unknown paths.
-func spaHandler() http.HandlerFunc {
-	dist, err := fs.Sub(webFS, "dist")
-	if err != nil {
-		log.Fatal(err)
-	}
+// spaHandler serves the built frontend and falls back to index.html for
+// client-side routes such as /help or /s/{srv}/d/{db}/t/{schema}/{table}.
+func spaHandler(dist fs.FS) http.HandlerFunc {
 	files := http.FileServerFS(dist)
 	return func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
