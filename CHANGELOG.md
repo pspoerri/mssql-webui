@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3.0 — 2026-09-04
+
+- Column header icons: sort ascending/descending/off, and a filter popover
+  (starts with, contains, equals) that writes `col^v` / `col~v` / `col=v` terms into the
+  search box. Filters stack across columns; clicking a lit filter icon removes it.
+  Sort and filters are part of the URL.
+- Search: quotes keep spaces together (`name='User 1002'`), bare words must all occur
+  in the same column.
+- Values render identically in the grid, console, CSV and text search, and can be
+  typed back in that form: dates/times in SQL style 121, bit as true/false, money with
+  four decimals, bigint and decimal as exact strings, binary as base64.
+- Column types with length/precision on header and cell hover and in the field bar.
+- Enter saves all pending changes (Ctrl+Enter in a multi-line editor); Esc reverts the
+  current cell; the field bar has Revert and close, and is multi-line only for text types.
+
 ## v0.2.0 — 2026-09-04
 
 - Column resizing: drag a header's right edge; double-click to fit the loaded content
