@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.5.0 — 2026-09-04
 
 - Sessions end after 30 minutes without a request (in addition to the 12-hour cap); a sweeper
   drops them every minute and closes their SQL connections. A visible tab pings every 5 minutes
