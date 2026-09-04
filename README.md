@@ -4,6 +4,7 @@ Browse and edit MS SQL databases in the browser with your own Entra ID
 identity. One Go binary serves the API and the React UI; SQL connections
 use the logged-in user's Entra access token, so SQL permissions apply
 per user.
+[SECURITY.md](SECURITY.md) shows how the token travels.
 
 ## Entra app registration
 
