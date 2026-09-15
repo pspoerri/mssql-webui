@@ -41,7 +41,11 @@ func initAuth() {
 		return
 	}
 	tenantID = mustEnv("TENANT_ID")
-	allowedGroup = mustEnv("ALLOWED_GROUP_ID")
+	// Optional: empty means any user in the tenant may log in.
+	allowedGroup = os.Getenv("ALLOWED_GROUP_ID")
+	if allowedGroup == "" {
+		log.Print("ALLOWED_GROUP_ID not set: any user in the tenant may log in")
+	}
 	oauthCfg = &oauth2.Config{
 		ClientID:     mustEnv("CLIENT_ID"),
 		ClientSecret: mustEnv("CLIENT_SECRET"),
@@ -155,12 +159,17 @@ func dropSession(id string) {
 	}
 }
 
+// checkClaims verifies audience and tenant, and group membership when group is
+// non-empty. An empty group admits every user in the tenant.
 func checkClaims(c claims, clientID, tenant, group string) error {
 	if c.Aud != clientID {
 		return errors.New("id_token audience mismatch")
 	}
 	if c.Tid != tenant {
 		return errors.New("id_token tenant mismatch")
+	}
+	if group == "" {
+		return nil
 	}
 	for _, g := range c.Groups {
 		if g == group {

@@ -15,11 +15,12 @@ per user.
 3. API permissions → Add → APIs my organization uses → **Azure SQL Database**
    → Delegated → `user_impersonation`. Grant admin consent if your tenant
    requires it.
-4. Token configuration → Add groups claim → **Security groups**, and tick
-   **Groups assigned to the application** so the claim never overflows.
+4. (Optional, only if using `ALLOWED_GROUP_ID`) Token configuration → Add
+   groups claim → **Security groups**, and tick **Groups assigned to the
+   application** so the claim never overflows.
 5. Enterprise applications → this app → Users and groups → assign the group
-   you will put in `ALLOWED_GROUP_ID`. Optionally set Properties →
-   **Assignment required** so Entra refuses everyone else.
+   you will put in `ALLOWED_GROUP_ID`, or assign users directly and set
+   Properties → **Assignment required** so Entra refuses everyone else.
 
 Every server must accept Entra logins, and each user needs a database user
 (`CREATE USER [name@tenant] FROM EXTERNAL PROVIDER`) or group login on the
@@ -37,7 +38,7 @@ while it resumes.
 | `TENANT_ID` | Entra tenant ID (the directory GUID, not the domain name) |
 | `CLIENT_ID`, `CLIENT_SECRET` | from the app registration |
 | `REDIRECT_URL` | `https://<host>/auth/callback` |
-| `ALLOWED_GROUP_ID` | object ID of the Entra group allowed in |
+| `ALLOWED_GROUP_ID` | optional; object ID of the Entra group allowed in. Unset means any user in the tenant who can sign in to the app (use **Assignment required** to restrict at Entra) |
 | `SQL_SERVERS` | comma-separated go-mssqldb URLs — without credentials in Entra mode, with a SQL login in dev mode, e.g. `sqlserver://sql1.internal:1433?encrypt=true,sqlserver://sql2:1433?trustservercertificate=true` |
 | `LISTEN_ADDR` | default `:8080` |
 | `DEV_USER` | skip Entra; run as this user with SQL logins from `SQL_SERVERS`. Dev only. |

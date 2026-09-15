@@ -33,6 +33,12 @@ func TestParseAndCheckClaims(t *testing.T) {
 	if err := checkClaims(c, "cid", "t1", "g9"); err == nil {
 		t.Fatal("non-member accepted")
 	}
+	if err := checkClaims(c, "cid", "t1", ""); err != nil {
+		t.Fatalf("empty group should admit any tenant user: %v", err)
+	}
+	if err := checkClaims(c, "other", "t1", ""); err == nil {
+		t.Fatal("wrong audience accepted with empty group")
+	}
 	if err := checkClaims(c, "other", "t1", "g1"); err == nil {
 		t.Fatal("wrong audience accepted")
 	}
