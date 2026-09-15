@@ -1,4 +1,6 @@
-FROM docker.io/library/node:22-alpine AS web
+# Build stages run on the build host's architecture; the Go binary is
+# cross-compiled for TARGETARCH so multi-arch builds never need QEMU.
+FROM --platform=$BUILDPLATFORM docker.io/library/node:22-alpine AS web
 WORKDIR /src/web
 RUN npm install -g pnpm@11
 COPY web/package.json web/pnpm-lock.yaml ./
@@ -6,14 +8,15 @@ RUN pnpm install --frozen-lockfile
 COPY web/ ./
 RUN pnpm build
 
-FROM docker.io/library/golang:1.27-alpine AS build
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27-alpine AS build
 ARG VERSION=dev
+ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/*.go ./
 COPY --from=web /src/backend/dist ./dist
-RUN CGO_ENABLED=0 go build -ldflags "-X main.version=$VERSION" -o /mssql-webui .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags "-X main.version=$VERSION" -o /mssql-webui .
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=build /mssql-webui /mssql-webui

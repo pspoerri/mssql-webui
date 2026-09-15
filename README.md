@@ -149,6 +149,15 @@ make build   # ./mssql-webui with the UI embedded; version from git describe (VE
 
 ## Container image (Docker or Podman)
 
+Prebuilt multi-arch images (amd64, arm64) are published to GitHub Container
+Registry on every push to `main` (tagged `main`) and on `v*` release tags:
+
+```bash
+podman run --rm -p 8080:8080 --env-file .env ghcr.io/pspoerri/mssql-webui:main
+```
+
+To build locally instead:
+
 ```bash
 make image                    # docker build -t mssql-webui .
 make image CONTAINER=podman   # or set CONTAINER=podman in .env
