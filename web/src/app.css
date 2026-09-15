@@ -99,6 +99,8 @@ nav .server svg { color: var(--muted); }
 nav .server .refresh { width: auto; padding: 2px; margin-left: auto; color: var(--faint); }
 nav .server .refresh:hover { color: var(--ink); }
 nav .kind { color: var(--faint); font-size: 11px; margin-left: auto; }
+nav .spinner { margin-left: auto; color: var(--faint); animation: spin .8s linear infinite; transform-box: fill-box; transform-origin: center; }
+@keyframes spin { to { transform: rotate(360deg); } }
 nav .schema { display: block; padding: 6px 6px 1px; color: var(--muted); font-size: 11px; }
 nav .add { color: var(--muted); font-size: 12px; }
 nav .noaccess { color: var(--faint); }

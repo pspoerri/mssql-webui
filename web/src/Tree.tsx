@@ -129,7 +129,7 @@ export function Tree({ selected, onSelect }: Props) {
                       title={access ? undefined : `You have no access to ${db}`}>
                       <Icon name="chevron" className="chev" /><Icon name="database" />
                       <span className="label">{db}</span>
-                      {busy && <span className="kind">loading…</span>}
+                      {busy && <Icon name="spinner" className="spinner" />}
                     </button>
                     {info && (
                       <ul>
@@ -160,7 +160,7 @@ export function Tree({ selected, onSelect }: Props) {
                         </li>
                         <li>
                           <button type="button" className="add"
-                            onClick={() => importCSV(s.name, db)}>+ Import CSV…</button>
+                            onClick={() => importCSV(s.name, db)}>+ Import CSV (creates table)…</button>
                         </li>
                       </ul>
                     )}
