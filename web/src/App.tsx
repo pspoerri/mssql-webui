@@ -127,6 +127,12 @@ function Help() {
           Key columns stay in place when scrolling sideways; the pin icon in a column header pins or unpins any column.</li>
         <li>The selected table, search, sort and scroll position are part of the URL, so a link can be bookmarked or shared.</li>
         <li><b>Download CSV</b> exports the whole table.</li>
+        <li><b>Import CSV…</b> (under a database in the tree) loads a CSV file into a table. A new table's header row
+          names the columns, and each column gets the narrowest type all of its values fit (bit, int, bigint, float,
+          date, datetime2, datetimeoffset, otherwise nvarchar). If the table already exists, the rows are appended
+          after a confirmation: header columns must match the table's (identity and computed columns are skipped, so
+          a downloaded CSV can be imported back). Empty fields become NULL; semicolon and tab delimiters are detected
+          automatically.</li>
       </ul>
       <h3>Searching</h3>
       <ul>

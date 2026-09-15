@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Import CSV: a database's tree menu can load a CSV file into a table. A new table's
+  column types are inferred as the narrowest type all values fit (bit, int, bigint, float,
+  date, datetime2, datetimeoffset, else nvarchar); importing into an existing table appends
+  the rows after a confirmation, matching header columns case-insensitively and skipping
+  identity/computed/rowversion columns so a downloaded CSV imports back. Empty fields become
+  NULL; semicolon/tab delimiters and a UTF-8 BOM are handled; one transaction either way.
+- Servers reachable without `master` access: a `databases=db1|db2` parameter on a
+  `SQL_SERVERS` URL lists those databases for users whose `master` login fails
+  ("Login failed for user '<token-identified principal>'"), instead of an error and an
+  empty list. Each is probed so inaccessible ones are greyed out; a server whose listing
+  failed is greyed out too.
+- Group check failures now say why: missing groups claim, groups overage, or not a member —
+  instead of a bare "not a member of the allowed group".
+
 - Sessions end after 30 minutes without a request (in addition to the 12-hour cap); a sweeper
   drops them every minute and closes their SQL connections. A visible tab pings every 5 minutes
   to stay signed in; hidden tabs time out. `SECURITY.md` describes the token

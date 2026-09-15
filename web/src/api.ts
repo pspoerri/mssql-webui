@@ -12,12 +12,20 @@ export const enc = encodeURIComponent
 
 // GET when body is undefined, POST JSON otherwise. A 401 sends the user to login.
 export async function api<T>(path: string, body?: unknown): Promise<T> {
-  const res = await fetch(
+  return handle(await fetch(
     path,
     body === undefined
       ? undefined
       : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
-  )
+  ))
+}
+
+// POST a raw file body, e.g. a CSV upload.
+export async function upload<T>(path: string, file: Blob, contentType = 'text/csv'): Promise<T> {
+  return handle(await fetch(path, { method: 'POST', headers: { 'Content-Type': contentType }, body: file }))
+}
+
+async function handle<T>(res: Response): Promise<T> {
   if (res.status === 401) {
     window.location.href = '/auth/login'
     throw new Error('not logged in')

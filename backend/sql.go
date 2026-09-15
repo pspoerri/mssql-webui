@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -116,8 +117,15 @@ func buildBatch(schema, table string, b batch) ([]stmt, error) {
 	return out, nil
 }
 
+// serverEntry is one configured SQL Server: the connection template plus the
+// databases to list for users who cannot open master (see listDatabases).
+type serverEntry struct {
+	cfg         msdsn.Config
+	fallbackDBs []string
+}
+
 var (
-	servers     map[string]msdsn.Config // by display name (host)
+	servers     map[string]serverEntry // by display name (host)
 	serverNames []string
 	errNotFound = errors.New("not found")
 )
@@ -132,8 +140,11 @@ func initSQL() {
 
 // parseServers reads comma-separated go-mssqldb URLs without credentials,
 // e.g. "sqlserver://sql1.internal:1433?encrypt=true,sqlserver://sql2?trustservercertificate=true".
-func parseServers(list string) (map[string]msdsn.Config, []string, error) {
-	m := map[string]msdsn.Config{}
+// A databases=db1|db2 parameter names the databases to show to users whose
+// master login fails ('|'-separated, since ',' splits servers and Go drops
+// ';' from query strings).
+func parseServers(list string) (map[string]serverEntry, []string, error) {
+	m := map[string]serverEntry{}
 	var names []string
 	for _, u := range strings.Split(list, ",") {
 		u = strings.TrimSpace(u)
@@ -147,7 +158,16 @@ func parseServers(list string) (map[string]msdsn.Config, []string, error) {
 		if _, ok := m[cfg.Host]; ok {
 			return nil, nil, fmt.Errorf("duplicate server host %q", cfg.Host)
 		}
-		m[cfg.Host] = cfg
+		e := serverEntry{cfg: cfg}
+		if v := cfg.Parameters["databases"]; v != "" {
+			for _, d := range strings.Split(v, "|") {
+				if d = strings.TrimSpace(d); d != "" {
+					e.fallbackDBs = append(e.fallbackDBs, d)
+				}
+			}
+			delete(cfg.Parameters, "databases")
+		}
+		m[cfg.Host] = e
 		names = append(names, cfg.Host)
 	}
 	if len(names) == 0 {
@@ -171,10 +191,11 @@ func (s *session) token(context.Context) (string, error) {
 // db returns the session's pool for one database, creating it on first use.
 // New connections fetch the user's current access token via token, so refresh is transparent.
 func (s *session) db(ctx context.Context, srv, dbName string) (*sql.DB, error) {
-	cfg, ok := servers[srv]
+	entry, ok := servers[srv]
 	if !ok {
 		return nil, errNotFound
 	}
+	cfg := entry.cfg
 	key := srv + "/" + dbName
 	s.mu.Lock()
 	if d, ok := s.dbs[key]; ok {
@@ -276,6 +297,7 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/s/{srv}/d/{db}/t/{schema}/{table}", withSession(handleColumns))
 	mux.HandleFunc("GET /api/s/{srv}/d/{db}/t/{schema}/{table}/rows", withSession(handleRows))
 	mux.HandleFunc("GET /api/s/{srv}/d/{db}/t/{schema}/{table}/csv", withSession(handleCSV))
+	mux.HandleFunc("POST /api/s/{srv}/d/{db}/t/{schema}/{table}/csv", withSession(handleImportCSV))
 	mux.HandleFunc("POST /api/s/{srv}/d/{db}/t/{schema}/{table}/rows", withSession(handleBatch))
 	mux.HandleFunc("POST /api/s/{srv}/d/{db}/query", withSession(handleQuery))
 }
@@ -291,10 +313,48 @@ type dbInfo struct {
 	Access bool   `json:"access"` // HAS_DBACCESS; only an explicit 0 is reported as no access
 }
 
+// noAccess are the error numbers that mean this user cannot open the
+// database, as opposed to it being paused or unreachable: login failed,
+// cannot open database, cannot access it under the current security context.
+var noAccess = map[int32]bool{18456: true, 4060: true, 916: true}
+
+// hasAccess reports whether the session can open srv/name. A user without a
+// master login cannot ask HAS_DBACCESS, so each fallback database is probed
+// with a bounded connect; unknown outcomes (paused, timeout) count as access
+// so the real error surfaces when the database is opened.
+func hasAccess(ctx context.Context, s *session, srv, name string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	_, err := s.db(ctx, srv, name)
+	var me mssql.Error
+	return err == nil || !errors.As(err, &me) || !noAccess[me.Number]
+}
+
 // listDatabases returns online databases; system=false skips master, model, msdb, tempdb.
+// Enumerating needs a connection to master; a user who only exists in specific
+// databases gets "Login failed for user '<token-identified principal>'" there.
+// For servers with a databases=... list that failure turns into the configured
+// list instead, and access errors surface when a database is opened.
 func listDatabases(ctx context.Context, s *session, srv string, system bool) ([]dbInfo, error) {
 	db, err := s.db(ctx, srv, "master")
 	if err != nil {
+		var re *oauth2.RetrieveError
+		if errors.As(err, &re) { // expired login must stay a 401, not the fallback
+			return nil, err
+		}
+		if fb := servers[srv].fallbackDBs; len(fb) > 0 {
+			out := make([]dbInfo, len(fb))
+			var wg sync.WaitGroup
+			for i, name := range fb {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					out[i] = dbInfo{Name: name, Access: hasAccess(ctx, s, srv, name)}
+				}()
+			}
+			wg.Wait()
+			return out, nil
+		}
 		return nil, err
 	}
 	rows, err := db.QueryContext(ctx, `SELECT name, HAS_DBACCESS(name) FROM sys.databases

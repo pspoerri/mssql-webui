@@ -58,9 +58,30 @@ func TestParseServers(t *testing.T) {
 	if !reflect.DeepEqual(names, []string{"a.internal", "b"}) {
 		t.Fatalf("names %v", names)
 	}
-	if m["a.internal"].Port != 1433 || m["b"].Host != "b" {
+	if m["a.internal"].cfg.Port != 1433 || m["b"].cfg.Host != "b" {
 		t.Fatalf("configs %+v", m)
 	}
+	if m["a.internal"].fallbackDBs != nil {
+		t.Fatalf("unexpected fallback list %v", m["a.internal"].fallbackDBs)
+	}
+	fb, _, err := parseServers("sqlserver://c:1433?encrypt=true&databases=app1| app2 |")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(fb["c"].fallbackDBs, []string{"app1", "app2"}) {
+		t.Fatalf("fallback %v", fb["c"].fallbackDBs)
+	}
+	if _, ok := fb["c"].cfg.Parameters["databases"]; ok {
+		t.Fatal("databases param leaked into the connection config")
+	}
+	one, _, err := parseServers("sqlserver://d:1433?databases=solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(one["d"].fallbackDBs, []string{"solo"}) {
+		t.Fatalf("single fallback db: %v", one["d"].fallbackDBs)
+	}
+
 	if _, _, err := parseServers(""); err == nil {
 		t.Fatal("empty list accepted")
 	}

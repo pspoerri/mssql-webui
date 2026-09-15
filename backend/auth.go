@@ -126,6 +126,9 @@ type claims struct {
 	Name   string   `json:"name"`
 	Email  string   `json:"preferred_username"`
 	Groups []string `json:"groups"`
+	// Entra replaces the groups claim with a _claim_names/_claim_sources
+	// reference when the user is in too many groups (the "overage").
+	ClaimNames map[string]json.RawMessage `json:"_claim_names"`
 }
 
 // parseIDToken reads claims without verifying the signature. The token comes
@@ -176,7 +179,15 @@ func checkClaims(c claims, clientID, tenant, group string) error {
 			return nil
 		}
 	}
-	return errors.New("not a member of the allowed group")
+	// Say why the group is missing: a misconfigured app registration is far
+	// more common than a user who truly is not in the group.
+	if _, ok := c.ClaimNames["groups"]; ok {
+		return errors.New("the token's group list overflowed; in the app registration under Token configuration, set the groups claim to \"Groups assigned to the application\" and assign the group to the app")
+	}
+	if c.Groups == nil {
+		return errors.New("the id_token has no groups claim; in the app registration add it under Token configuration > Add groups claim > Security groups")
+	}
+	return errors.New("not a member of the allowed group (ALLOWED_GROUP_ID must be the group's object ID, and the user a member of that group; a user assigned directly to the app is not)")
 }
 
 func registerAuth(mux *http.ServeMux) {

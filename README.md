@@ -25,11 +25,32 @@ per user.
 Every server must accept Entra logins, and each user needs a database user
 (`CREATE USER [name@tenant] FROM EXTERNAL PROVIDER`) or group login on the
 databases they should see. Listing databases queries `sys.databases` on
-`master`, so users need access to `master` too; otherwise the server shows
-an error and an empty list. Databases where `HAS_DBACCESS()` returns 0 are
-greyed out; system databases are hidden unless toggled on at the bottom of
-the tree. A paused serverless database is retried for up to two minutes
-while it resumes.
+`master`, so a user who also exists in `master` sees the full list. A user
+who only exists in specific databases fails there with `Login failed for
+user '<token-identified principal>'` — either create the user in `master`
+too, or add `databases=db1|db2` to the server URL:
+
+```
+SQL_SERVERS='sqlserver://sql1.database.windows.net:1433?encrypt=true&databases=app1|app2'
+```
+
+When the `master` login fails, those databases are listed instead ('|'
+separates names because ',' separates servers). Each one is probed with a
+short connect, so databases the user cannot open are greyed out here too.
+Databases where `HAS_DBACCESS()` returns 0 are greyed out, and so is a
+server whose listing failed entirely; system databases are hidden unless
+toggled on at the bottom of the tree. A paused serverless database is
+retried for up to two minutes while it resumes.
+
+If login is refused with a group error, the message says why: *no groups
+claim* means the app registration lacks the claim (step 4 above); *group
+list overflowed* means the claim was replaced by an overage reference —
+tick **Groups assigned to the application**; *not a member* means exactly
+that. `ALLOWED_GROUP_ID` must be the group's **object ID** (a GUID), and
+users must be members of that group — assigning a user directly to the
+enterprise app does not make them a member; either add them to the group,
+or unset `ALLOWED_GROUP_ID` and restrict access with **Assignment
+required** alone.
 
 ## Configuration
 
@@ -39,7 +60,7 @@ while it resumes.
 | `CLIENT_ID`, `CLIENT_SECRET` | from the app registration |
 | `REDIRECT_URL` | `https://<host>/auth/callback` |
 | `ALLOWED_GROUP_ID` | optional; object ID of the Entra group allowed in. Unset means any user in the tenant who can sign in to the app (use **Assignment required** to restrict at Entra) |
-| `SQL_SERVERS` | comma-separated go-mssqldb URLs — without credentials in Entra mode, with a SQL login in dev mode, e.g. `sqlserver://sql1.internal:1433?encrypt=true,sqlserver://sql2:1433?trustservercertificate=true` |
+| `SQL_SERVERS` | comma-separated go-mssqldb URLs — without credentials in Entra mode, with a SQL login in dev mode, e.g. `sqlserver://sql1.internal:1433?encrypt=true,sqlserver://sql2:1433?trustservercertificate=true`. An optional `databases=db1|db2` parameter lists the databases shown to users whose `master` login fails |
 | `LISTEN_ADDR` | default `:8080` |
 | `DEV_USER` | skip Entra; run as this user with SQL logins from `SQL_SERVERS`. Dev only. |
 
@@ -60,7 +81,18 @@ kept in the URL (`?q=...&sort=col&dir=desc&row=250`), so a link opens at the
 same place. Drag a column header's right edge to resize it, double-click it to fit
 the content and again to fit the label. Key columns stay put when scrolling
 sideways, edited cells are highlighted, and the focused cell is mirrored in an
-editor above the table; Esc reverts that one cell. **Download CSV** streams the whole table.
+editor above the table; Esc reverts that one cell. **Download CSV** streams the whole table, and **Import CSV…** under a
+database in the tree loads a CSV file into a table. For a new table, the
+header row names the columns and each column gets the narrowest type all of
+its values fit (bit, int, bigint, float, date, datetime2, datetimeoffset,
+otherwise nvarchar), every column nullable. If the table already exists, the
+rows are appended after a confirmation: the header columns must exist in the
+table (matched case-insensitively; identity, computed and rowversion columns
+are skipped so a downloaded CSV imports back), and values are converted by
+SQL Server like grid edits. Empty fields become NULL, a UTF-8 BOM is
+skipped, and semicolon or tab delimiters (Excel) are detected from the
+header line. Everything runs in one transaction, so a failed import leaves
+nothing behind.
 
 Tables with a primary key are editable: change cells, tick rows to delete, or
 add rows. Nothing is written until **Save** (or Enter in a cell, Ctrl+Enter in

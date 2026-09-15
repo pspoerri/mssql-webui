@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, enc, type Selection, type ServerInfo, type TableInfo } from './api'
+import { api, enc, upload, type Selection, type ServerInfo, type TableInfo } from './api'
 import { Icon } from './icons'
 
 type DbInfo = { schemas: string[]; tables: TableInfo[] }
@@ -68,6 +68,40 @@ export function Tree({ selected, onSelect }: Props) {
     }
   }
 
+  // Import a CSV: pick a file, name the table, POST the file. A new table's
+  // column types are inferred by the server; an existing table gets the rows
+  // appended after a confirmation. window.prompt to match create().
+  const importCSV = (srv: string, db: string) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.csv,text/csv'
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) return
+      const def = 'dbo.' + (file.name.replace(/\.[^.]*$/, '').replace(/[^\w]+/g, '_') || 'imported')
+      const target = window.prompt('Import into new table (schema.table)', def)?.trim()
+      if (!target) return
+      const dot = target.indexOf('.')
+      const schema = dot < 0 ? 'dbo' : target.slice(0, dot)
+      const name = dot < 0 ? target : target.slice(dot + 1)
+      const base = `/api/s/${enc(srv)}/d/${enc(db)}/t/${enc(schema)}/${enc(name)}`
+      const exists = await api(base).then(() => true, () => false)
+      if (exists && !window.confirm(`${schema}.${name} already exists. Append the file's rows to it?`)) return
+      setLoading(`${srv}/${db}`)
+      try {
+        await upload(`${base}/csv${exists ? '?append=1' : ''}`, file)
+        setErr('')
+        await load(srv, db)
+        onSelect({ srv, db, table: { schema, name, kind: 'table' } })
+      } catch (e) {
+        setErr((e as Error).message)
+      } finally {
+        setLoading('')
+      }
+    }
+    input.click()
+  }
+
   const isSel = (srv: string, db: string, t?: TableInfo, isConsole?: boolean) =>
     selected?.srv === srv && selected?.db === db && !!selected?.console === !!isConsole &&
     selected?.table?.schema === t?.schema && selected?.table?.name === t?.name
@@ -78,7 +112,7 @@ export function Tree({ selected, onSelect }: Props) {
       <ul>
         {servers.map((s) => (
           <li key={s.name}>
-            <div className="server">
+            <div className={s.error ? 'server noaccess' : 'server'}>
               <Icon name="server" />
               <span className="label">{s.name}</span>
               <button type="button" className="refresh" title="Refresh" aria-label={`Refresh ${s.name}`} onClick={() => refresh(s.name)}><Icon name="refresh" /></button>
@@ -123,6 +157,10 @@ export function Tree({ selected, onSelect }: Props) {
                         <li>
                           <button type="button" className="add"
                             onClick={() => create(`/api/s/${enc(s.name)}/d/${enc(db)}/schemas`, 'schema', () => load(s.name, db))}>+ New schema…</button>
+                        </li>
+                        <li>
+                          <button type="button" className="add"
+                            onClick={() => importCSV(s.name, db)}>+ Import CSV…</button>
                         </li>
                       </ul>
                     )}

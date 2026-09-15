@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -44,6 +45,23 @@ func TestParseAndCheckClaims(t *testing.T) {
 	}
 	if err := checkClaims(c, "cid", "t2", "g1"); err == nil {
 		t.Fatal("wrong tenant accepted")
+	}
+	// The error says why the group check failed: not a member, claim missing,
+	// or the overage marker instead of the claim.
+	if err := checkClaims(c, "cid", "t1", "g9"); !strings.Contains(err.Error(), "not a member") {
+		t.Fatalf("non-member error: %v", err)
+	}
+	noGroups, _ := parseIDToken(fakeIDToken(map[string]any{"aud": "cid", "tid": "t1"}))
+	if err := checkClaims(noGroups, "cid", "t1", "g1"); !strings.Contains(err.Error(), "no groups claim") {
+		t.Fatalf("missing claim error: %v", err)
+	}
+	if err := checkClaims(noGroups, "cid", "t1", ""); err != nil {
+		t.Fatalf("missing claim must not matter without ALLOWED_GROUP_ID: %v", err)
+	}
+	overage, _ := parseIDToken(fakeIDToken(map[string]any{"aud": "cid", "tid": "t1",
+		"_claim_names": map[string]string{"groups": "src1"}}))
+	if err := checkClaims(overage, "cid", "t1", "g1"); !strings.Contains(err.Error(), "overflowed") {
+		t.Fatalf("overage error: %v", err)
 	}
 	if _, err := parseIDToken("nope"); err == nil {
 		t.Fatal("malformed token accepted")
