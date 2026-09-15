@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- No-access errors say so: opening a database the user cannot access answers 403
+  "you have no access to database …" instead of the raw "Login failed for user
+  '<token-identified principal>'" text, and a server where the login cannot connect
+  to `master` explains that databases cannot be listed and points at the
+  `databases=` URL parameter instead of showing the bare token error.
+- The "Import CSV (creates table)…" tree item only appears on databases where the
+  user can write (`CREATE TABLE` or `INSERT` permission, or membership in
+  `db_owner`/`db_datawriter`/`db_ddladmin`).
 - Import CSV: a database's tree menu can load a CSV file into a table. A new table's
   column types are inferred as the narrowest type all values fit (bit, int, bigint, float,
   date, datetime2, datetimeoffset, else nvarchar); importing into an existing table appends

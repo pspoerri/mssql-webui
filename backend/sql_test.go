@@ -222,6 +222,19 @@ func TestWakeRetriesWhileResuming(t *testing.T) {
 	}
 }
 
+func TestWrapAccess(t *testing.T) {
+	var ae *accessError
+	if err := wrapAccess(mssql.Error{Number: 18456}, "master"); !errors.As(err, &ae) {
+		t.Errorf("login failed not wrapped: %v", err)
+	}
+	if err := wrapAccess(mssql.Error{Number: 40613}, "db"); errors.As(err, &ae) {
+		t.Errorf("resuming database wrongly wrapped as no access: %v", err)
+	}
+	if err := wrapAccess(errors.New("plain"), "db"); errors.As(err, &ae) {
+		t.Errorf("non-SQL error wrongly wrapped: %v", err)
+	}
+}
+
 func TestFailStatusCodes(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -231,6 +244,7 @@ func TestFailStatusCodes(t *testing.T) {
 	}{
 		{"not found", errNotFound, 404, ""},
 		{"sql error", mssql.Error{Message: "boom"}, 400, "boom"},
+		{"no access", wrapAccess(mssql.Error{Number: 4060, Message: "Cannot open database"}, "adv"), 403, "you have no access to database"},
 		{"token expired", &oauth2.RetrieveError{}, 401, ""},
 		{"other", errors.New("x"), 500, ""},
 	}

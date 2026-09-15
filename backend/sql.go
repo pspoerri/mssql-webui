@@ -201,7 +201,7 @@ func (s *session) db(ctx context.Context, srv, dbName string) (*sql.DB, error) {
 	if d, ok := s.dbs[key]; ok {
 		s.mu.Unlock()
 		if err := wake(ctx, d); err != nil {
-			return nil, err
+			return nil, wrapAccess(err, dbName)
 		}
 		return d, nil
 	}
@@ -227,7 +227,7 @@ func (s *session) db(ctx context.Context, srv, dbName string) (*sql.DB, error) {
 	s.dbs[key] = d
 	s.mu.Unlock()
 	if err := wake(ctx, d); err != nil {
-		return nil, err
+		return nil, wrapAccess(err, dbName)
 	}
 	return d, nil
 }
@@ -259,15 +259,19 @@ func wake(ctx context.Context, d *sql.DB) error {
 }
 
 // fail maps errors to status codes: token refresh failure means the login is
-// gone (401), SQL errors are the user's problem (400), the rest is ours (500).
+// gone (401), missing permissions are 403, SQL errors are the user's
+// problem (400), the rest is ours (500).
 func fail(w http.ResponseWriter, err error) {
 	var re *oauth2.RetrieveError
+	var ae *accessError
 	var me mssql.Error
 	switch {
 	case errors.Is(err, errNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	case errors.As(err, &re):
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "session expired"})
+	case errors.As(err, &ae):
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": ae.Error()})
 	case errors.As(err, &me):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": sqlMessages(me)})
 	default:
@@ -318,6 +322,30 @@ type dbInfo struct {
 // cannot open database, cannot access it under the current security context.
 var noAccess = map[int32]bool{18456: true, 4060: true, 916: true}
 
+// accessError is a connect failure with one of the noAccess numbers: the
+// database is there, but this user may not open it. The raw server text
+// ("Login failed for user '<token-identified principal>'") reads like a
+// broken token, so the message states what it actually means.
+type accessError struct {
+	db  string
+	err error
+}
+
+func (e *accessError) Error() string {
+	return fmt.Sprintf("you have no access to database %q (%v)", e.db, e.err)
+}
+func (e *accessError) Unwrap() error { return e.err }
+
+// wrapAccess tags a no-access connect error with the database it was for;
+// any other error is returned unchanged.
+func wrapAccess(err error, db string) error {
+	var me mssql.Error
+	if errors.As(err, &me) && noAccess[me.Number] {
+		return &accessError{db: db, err: err}
+	}
+	return err
+}
+
 // hasAccess reports whether the session can open srv/name. A user without a
 // master login cannot ask HAS_DBACCESS, so each fallback database is probed
 // with a bounded connect; unknown outcomes (paused, timeout) count as access
@@ -326,8 +354,8 @@ func hasAccess(ctx context.Context, s *session, srv, name string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	_, err := s.db(ctx, srv, name)
-	var me mssql.Error
-	return err == nil || !errors.As(err, &me) || !noAccess[me.Number]
+	var ae *accessError
+	return !errors.As(err, &ae)
 }
 
 // listDatabases returns online databases; system=false skips master, model, msdb, tempdb.
@@ -354,6 +382,10 @@ func listDatabases(ctx context.Context, s *session, srv string, system bool) ([]
 			}
 			wg.Wait()
 			return out, nil
+		}
+		var ae *accessError
+		if errors.As(err, &ae) {
+			return nil, fmt.Errorf("you have no access on this server: your login cannot connect to master, so databases cannot be listed (%v); if your user exists only in specific databases, add databases=... to this server's SQL_SERVERS URL", ae.err)
 		}
 		return nil, err
 	}
@@ -443,7 +475,15 @@ func handleTables(w http.ResponseWriter, r *http.Request, s *session) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"schemas": schemas, "tables": tables})
+	// writable gates the tree's import/create buttons. Fixed roles are listed
+	// explicitly because HAS_PERMS_BY_NAME does not reflect their membership.
+	var writable bool
+	if err := db.QueryRowContext(r.Context(), `SELECT CAST(CASE WHEN IS_MEMBER('db_owner') = 1 OR IS_MEMBER('db_datawriter') = 1 OR IS_MEMBER('db_ddladmin') = 1
+		OR HAS_PERMS_BY_NAME(NULL, NULL, 'CREATE TABLE') = 1 OR HAS_PERMS_BY_NAME(NULL, NULL, 'INSERT') = 1 THEN 1 ELSE 0 END AS BIT)`).Scan(&writable); err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"schemas": schemas, "tables": tables, "writable": writable})
 }
 
 // createNamed runs `ddl [name]` with the name from the JSON body {"name": ...}.

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api, enc, upload, type Selection, type ServerInfo, type TableInfo } from './api'
 import { Icon } from './icons'
 
-type DbInfo = { schemas: string[]; tables: TableInfo[] }
+type DbInfo = { schemas: string[]; tables: TableInfo[]; writable: boolean }
 type Props = { selected: Selection | null; onSelect: (s: Selection) => void }
 
 export function Tree({ selected, onSelect }: Props) {
@@ -158,10 +158,12 @@ export function Tree({ selected, onSelect }: Props) {
                           <button type="button" className="add"
                             onClick={() => create(`/api/s/${enc(s.name)}/d/${enc(db)}/schemas`, 'schema', () => load(s.name, db))}>+ New schema…</button>
                         </li>
-                        <li>
-                          <button type="button" className="add"
-                            onClick={() => importCSV(s.name, db)}>+ Import CSV (creates table)…</button>
-                        </li>
+                        {info.writable && (
+                          <li>
+                            <button type="button" className="add"
+                              onClick={() => importCSV(s.name, db)}>+ Import CSV (creates table)…</button>
+                          </li>
+                        )}
                       </ul>
                     )}
                   </li>
