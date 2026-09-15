@@ -8,6 +8,8 @@
   the rows after a confirmation, matching header columns case-insensitively and skipping
   identity/computed/rowversion columns so a downloaded CSV imports back. Empty fields become
   NULL; semicolon/tab delimiters and a UTF-8 BOM are handled; one transaction either way.
+  Uploads are spooled to a temp file and streamed from there in batched INSERTs, so memory
+  stays flat regardless of file size (capped at 2 GB, up from 100 MB in memory).
 - Servers reachable without `master` access: a `databases=db1|db2` parameter on a
   `SQL_SERVERS` URL lists those databases for users whose `master` login fails
   ("Login failed for user '<token-identified principal>'"), instead of an error and an

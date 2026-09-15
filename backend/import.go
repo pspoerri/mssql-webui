@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -164,9 +166,9 @@ func utf16Len(s string) int {
 	return n
 }
 
-// inferColumns names the columns from the header (blanks become columnN,
-// duplicates are refused) and narrows each column's kind over all rows.
-func inferColumns(header []string, rows [][]string) ([]csvColumn, error) {
+// newColumns names the columns from the header (blanks become columnN,
+// duplicates are refused), each starting as every kind at once.
+func newColumns(header []string) ([]csvColumn, error) {
 	all := kBit | kInt | kBigint | kFloat | kDate | kDateTime | kDTOffset
 	cols := make([]csvColumn, len(header))
 	names := map[string]bool{}
@@ -182,18 +184,33 @@ func inferColumns(header []string, rows [][]string) ([]csvColumn, error) {
 		names[key] = true
 		cols[i] = csvColumn{Name: h, kinds: all}
 	}
-	for _, row := range rows {
-		for i, v := range row {
-			if v == "" {
-				continue
-			}
-			c := &cols[i]
-			c.seen = true
-			c.kinds &= valueKinds(v)
-			if n := utf16Len(v); n > c.maxLen {
-				c.maxLen = n
-			}
+	return cols, nil
+}
+
+// observeRow narrows each column's kind by one row's values.
+func observeRow(cols []csvColumn, row []string) {
+	for i, v := range row {
+		if v == "" {
+			continue
 		}
+		c := &cols[i]
+		c.seen = true
+		c.kinds &= valueKinds(v)
+		if n := utf16Len(v); n > c.maxLen {
+			c.maxLen = n
+		}
+	}
+}
+
+// inferColumns names the columns from the header and narrows each column's
+// kind over all rows.
+func inferColumns(header []string, rows [][]string) ([]csvColumn, error) {
+	cols, err := newColumns(header)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		observeRow(cols, row)
 	}
 	return cols, nil
 }
@@ -206,29 +223,43 @@ func createTableSQL(schema, table string, cols []csvColumn) string {
 	return "CREATE TABLE " + quoteIdent(schema) + "." + quoteIdent(table) + " (" + strings.Join(defs, ", ") + ")"
 }
 
-// buildImport turns the rows into multi-row INSERTs, staying under SQL
-// Server's 2100-parameter and 1000-rows-per-VALUES limits.
-func buildImport(schema, table string, cols []csvColumn, rows [][]string) []stmt {
+// insertHead is the shared prefix of every INSERT for these columns.
+func insertHead(schema, table string, cols []csvColumn) string {
 	names := make([]string, len(cols))
 	for i, c := range cols {
 		names[i] = quoteIdent(c.Name)
 	}
-	head := "INSERT INTO " + quoteIdent(schema) + "." + quoteIdent(table) + " (" + strings.Join(names, ", ") + ") VALUES "
-	per := min(1000, max(1, 2000/len(cols)))
+	return "INSERT INTO " + quoteIdent(schema) + "." + quoteIdent(table) + " (" + strings.Join(names, ", ") + ") VALUES "
+}
+
+// rowsPerInsert stays under SQL Server's 2100-parameter and
+// 1000-rows-per-VALUES limits.
+func rowsPerInsert(cols []csvColumn) int {
+	return min(1000, max(1, 2000/len(cols)))
+}
+
+// insertStmt turns one chunk of rows into a multi-row INSERT.
+func insertStmt(head string, cols []csvColumn, chunk [][]string) stmt {
+	vals := make([]string, len(chunk))
+	var args []any
+	for j, row := range chunk {
+		marks := make([]string, len(cols))
+		for i, c := range cols {
+			args = append(args, c.sqlValue(row[i]))
+			marks[i] = fmt.Sprintf("@p%d", len(args))
+		}
+		vals[j] = "(" + strings.Join(marks, ", ") + ")"
+	}
+	return stmt{SQL: head + strings.Join(vals, ", "), Args: args, Kind: "insert"}
+}
+
+// buildImport turns the rows into multi-row INSERTs.
+func buildImport(schema, table string, cols []csvColumn, rows [][]string) []stmt {
+	head := insertHead(schema, table, cols)
+	per := rowsPerInsert(cols)
 	var out []stmt
 	for start := 0; start < len(rows); start += per {
-		chunk := rows[start:min(start+per, len(rows))]
-		vals := make([]string, len(chunk))
-		var args []any
-		for j, row := range chunk {
-			marks := make([]string, len(cols))
-			for i, c := range cols {
-				args = append(args, c.sqlValue(row[i]))
-				marks[i] = fmt.Sprintf("@p%d", len(args))
-			}
-			vals[j] = "(" + strings.Join(marks, ", ") + ")"
-		}
-		out = append(out, stmt{SQL: head + strings.Join(vals, ", "), Args: args, Kind: "insert"})
+		out = append(out, insertStmt(head, cols, rows[start:min(start+per, len(rows))]))
 	}
 	return out
 }
@@ -317,88 +348,198 @@ func matchColumns(header []string, tcols []tableCol) ([]csvColumn, []int, error)
 	return cols, keep, nil
 }
 
+// projectRow reduces one row to the kept indices.
+func projectRow(row []string, keep []int) []string {
+	r := make([]string, len(keep))
+	for j, k := range keep {
+		r[j] = row[k]
+	}
+	return r
+}
+
 // project reduces each row to the kept indices.
 func project(rows [][]string, keep []int) [][]string {
 	out := make([][]string, len(rows))
 	for i, row := range rows {
-		r := make([]string, len(keep))
-		for j, k := range keep {
-			r[j] = row[k]
-		}
-		out[i] = r
+		out[i] = projectRow(row, keep)
 	}
 	return out
+}
+
+// maxImportBytes caps an upload. The body is spooled to disk, not memory,
+// so the cap only protects the temp filesystem.
+const maxImportBytes = 2 << 30
+
+// openCSV starts reading the spooled file from the top: past Excel's UTF-8
+// BOM, with the sniffed delimiter.
+func openCSV(f *os.File, delim rune) (*csv.Reader, error) {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, err
+	}
+	br := bufio.NewReaderSize(f, 64<<10)
+	if b, _ := br.Peek(3); bytes.Equal(b, []byte("\ufeff")) {
+		br.Discard(3)
+	}
+	cr := csv.NewReader(br)
+	cr.Comma = delim
+	return cr, nil
 }
 
 // handleImportCSV fills [schema].[table] from the posted CSV, all in one
 // transaction. Without append=1 the table is created first, its column types
 // inferred from the values; with append=1 the rows go into the existing
 // table, converted by SQL Server like grid edits.
+//
+// The body is spooled to a temp file and the CSV is then streamed from it \u2014
+// once to infer types (when creating), once to insert in batches \u2014 so memory
+// stays flat no matter the file size.
 func handleImportCSV(w http.ResponseWriter, r *http.Request, s *session) {
 	db, err := s.db(r.Context(), r.PathValue("srv"), r.PathValue("db"))
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 100<<20))
+	tmp, err := os.CreateTemp("", "mssql-webui-import-*.csv")
 	if err != nil {
+		fail(w, err)
+		return
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+	if _, err := io.Copy(tmp, http.MaxBytesReader(w, r.Body, maxImportBytes)); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	data = bytes.TrimPrefix(data, []byte("\ufeff")) // Excel's UTF-8 BOM
-	cr := csv.NewReader(bytes.NewReader(data))
-	cr.Comma = sniffDelim(data)
-	records, err := cr.ReadAll()
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad csv: " + err.Error()})
+	head := make([]byte, 64<<10)
+	n, err := tmp.ReadAt(head, 0)
+	if err != nil && err != io.EOF {
+		fail(w, err)
 		return
 	}
-	if len(records) == 0 {
+	delim := sniffDelim(bytes.TrimPrefix(head[:n], []byte("\ufeff")))
+
+	badCSV := func(err error) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad csv: " + err.Error()})
+	}
+	cr, err := openCSV(tmp, delim)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	header, err := cr.Read()
+	if err == io.EOF {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty file; the first row must name the columns"})
 		return
 	}
-	if len(records[0]) > 1024 {
+	if err != nil {
+		badCSV(err)
+		return
+	}
+	if len(header) > 1024 {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "more than 1024 columns"})
 		return
 	}
-	header, body := records[0], records[1:]
-	var stmts []stmt
+
+	schema, table := r.PathValue("schema"), r.PathValue("table")
+	var cols []csvColumn
+	var keep []int // append mode: header index of each kept column
+	var create string
 	if r.URL.Query().Get("append") == "1" {
 		tcols, err := writableColumns(r.Context(), db, objName(r))
 		if err != nil {
 			fail(w, err)
 			return
 		}
-		cols, keep, err := matchColumns(header, tcols)
-		if err != nil {
+		if cols, keep, err = matchColumns(header, tcols); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		stmts = buildImport(r.PathValue("schema"), r.PathValue("table"), cols, project(body, keep))
 	} else {
-		cols, err := inferColumns(header, body)
-		if err != nil {
+		if cols, err = newColumns(header); err != nil {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		stmts = append([]stmt{{SQL: createTableSQL(r.PathValue("schema"), r.PathValue("table"), cols)}},
-			buildImport(r.PathValue("schema"), r.PathValue("table"), cols, body)...)
+		// Inference pass: narrow the types over all rows, holding only
+		// per-column stats. Any parse error surfaces here, before DDL runs.
+		for {
+			row, err := cr.Read()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				badCSV(err)
+				return
+			}
+			observeRow(cols, row)
+		}
+		create = createTableSQL(schema, table, cols)
+		// Rewind for the insert pass; the header parsed once already.
+		if cr, err = openCSV(tmp, delim); err != nil {
+			fail(w, err)
+			return
+		}
+		if _, err := cr.Read(); err != nil {
+			fail(w, err)
+			return
+		}
 	}
+
 	tx, err := db.BeginTx(r.Context(), nil)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	for _, st := range stmts {
-		if _, err := tx.ExecContext(r.Context(), st.SQL, st.Args...); err != nil {
+	if create != "" {
+		if _, err := tx.ExecContext(r.Context(), create); err != nil {
 			tx.Rollback()
 			fail(w, err)
 			return
 		}
 	}
+	insHead, per := insertHead(schema, table, cols), rowsPerInsert(cols)
+	batch := make([][]string, 0, per)
+	rows := 0
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		st := insertStmt(insHead, cols, batch)
+		if _, err := tx.ExecContext(r.Context(), st.SQL, st.Args...); err != nil {
+			return err
+		}
+		rows += len(batch)
+		batch = batch[:0]
+		return nil
+	}
+	for {
+		row, err := cr.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			tx.Rollback()
+			badCSV(err)
+			return
+		}
+		if keep != nil {
+			row = projectRow(row, keep)
+		}
+		if batch = append(batch, row); len(batch) == per {
+			if err := flush(); err != nil {
+				tx.Rollback()
+				fail(w, err)
+				return
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		tx.Rollback()
+		fail(w, err)
+		return
+	}
 	if err := tx.Commit(); err != nil {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"rows": len(records) - 1})
+	writeJSON(w, http.StatusOK, map[string]any{"rows": rows})
 }

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -129,6 +130,33 @@ func TestSniffDelim(t *testing.T) {
 	for in, want := range cases {
 		if got := sniffDelim([]byte(in)); got != want {
 			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestOpenCSV(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "*.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString("\ufeffa;b\n1;x\n"); err != nil {
+		t.Fatal(err)
+	}
+	// Reading twice from the same file must both times start past the BOM,
+	// like the inference and insert passes over the spooled upload.
+	for pass := 0; pass < 2; pass++ {
+		cr, err := openCSV(f, ';')
+		if err != nil {
+			t.Fatal(err)
+		}
+		records, err := cr.ReadAll()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := [][]string{{"a", "b"}, {"1", "x"}}
+		if !reflect.DeepEqual(records, want) {
+			t.Errorf("pass %d: got %v, want %v", pass, records, want)
 		}
 	}
 }
