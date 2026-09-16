@@ -185,7 +185,7 @@ func TestSweepSessionsClosesPools(t *testing.T) {
 	sessions.m["old"] = &session{expires: now.Add(-time.Second), lastSeen: now, dbs: map[string]*sql.DB{"a": oldDB}}
 	sessions.m["live"] = &session{expires: now.Add(time.Hour), lastSeen: now.Add(-idleTTL + time.Minute), dbs: map[string]*sql.DB{"a": liveDB}}
 	sessions.Unlock()
-	defer dropSession("live")
+	defer dropSession("live", "test")
 
 	// A request refreshes lastSeen before the sweep.
 	h := withSession(func(w http.ResponseWriter, r *http.Request, s *session) { w.WriteHeader(http.StatusOK) })

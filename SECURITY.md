@@ -93,6 +93,15 @@ port, and each server connects with the SQL login in its `SQL_SERVERS` URL.
 Never set `DEV_USER` in production. The server refuses to start if it is
 combined with `TENANT_ID` or `CLIENT_SECRET`.
 
+## Audit log
+
+Every login and logout, every SQL connection opened and every statement,
+commit and rollback is written to stdout as one JSON line naming the user and
+the outcome; stderr carries diagnostics only. Statements are caught at the
+database driver (`backend/audit.go`), below every handler, so nothing reaches
+SQL Server without a line. Statement text is recorded; parameter values and
+results are not. The README describes the format.
+
 ## Reporting a vulnerability
 
 Open an issue at https://github.com/pspoerri/mssql-webui/issues, or contact

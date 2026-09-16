@@ -218,7 +218,8 @@ func (s *session) db(ctx context.Context, srv, dbName string) (*sql.DB, error) {
 		}
 		conn = c
 	}
-	d := sql.OpenDB(conn)
+	// Every connect, statement and transaction on this pool is audited under the session's user.
+	d := sql.OpenDB(auditConnector{Connector: conn, base: auditEvent{User: s.Email, Server: srv, DB: dbName}})
 	d.SetMaxOpenConns(3)
 	// ponytail: idle connections close after 5 min; the sql.DB handle and the
 	// session live until logout or restart. Add a session sweeper if

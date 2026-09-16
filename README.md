@@ -67,6 +67,37 @@ required** alone.
 The process needs TCP reachability to every server (peered VNet, private
 endpoint, or VPN).
 
+## Audit log
+
+Every login and logout, every SQL connection opened and every statement is
+written to **stdout** as one JSON object per line, so a log collector can take
+stdout as the audit stream; diagnostics go to stderr. Each line names the user
+and says whether the action succeeded:
+
+```
+{"time":"2026-09-16T09:12:03.412Z","event":"login","user":"ann@example.com","name":"Ann","ok":true}
+{"time":"2026-09-16T09:12:04.007Z","event":"connect","user":"ann@example.com","server":"sql1.internal","db":"app1","ok":true,"ms":180.3}
+{"time":"2026-09-16T09:12:04.020Z","event":"query","user":"ann@example.com","server":"sql1.internal","db":"app1","ok":true,"ms":12.6,"rows":101,"sql":"SELECT * FROM [dbo].[orders] ORDER BY [id] OFFSET @p1 ROWS FETCH NEXT @p2 ROWS ONLY"}
+{"time":"2026-09-16T09:13:10.551Z","event":"exec","user":"ann@example.com","server":"sql1.internal","db":"app1","ok":false,"error":"The UPDATE statement conflicted with the CHECK constraint \"ck_qty\".","ms":3.1,"sql":"UPDATE [dbo].[orders] SET [qty] = @p1 WHERE [id] = @p2"}
+{"time":"2026-09-16T09:40:00.000Z","event":"logout","user":"ann@example.com","name":"Ann","reason":"idle","ok":true}
+```
+
+| `event` | Meaning |
+|---|---|
+| `login` | the Entra callback. `ok:false` with `error` for a refused login (bad state, Entra error, wrong tenant or audience, not in the group); `user` is set once the id_token got that far |
+| `logout` | the session ended; `reason` is `user` (logout button), `idle` (30 min without a request), `expired` (12 h after login) or `relogin` (replaced by a new login from the same browser) |
+| `connect` | a SQL connection opened as the user; a refused one carries the server's message, e.g. `Login failed for user` |
+| `query`, `exec` | one statement; `rows` is rows read or rows affected. A query is logged when its result set is closed, so an error that arrives among the rows counts as a failure |
+| `begin`, `commit`, `rollback` | the transaction around grid edits and CSV imports; a statement that succeeded and was then rolled back shows up as such |
+
+Statement text is logged (cut at 8 KB with `"truncated":true`); parameter
+values and result contents are not. The liveness ping before a request is not
+a statement and is not logged. In dev mode `user` is `DEV_USER`. Statements
+are caught at the database driver, so no request path can reach SQL Server
+without a line. To keep the stream, redirect stdout (`./mssql-webui
+>> audit.jsonl`); with a container, `docker logs <name> 2>/dev/null` prints
+stdout alone, and log drivers tag each line with its source.
+
 ## Using it
 
 Pick a table in the tree; the URL (`/s/{server}/d/{db}/t/{schema}/{table}`)

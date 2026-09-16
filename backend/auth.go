@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -85,9 +86,21 @@ type session struct {
 	dbs      map[string]*sql.DB // "server/database" -> pool, filled by sql.go
 }
 
+// ended says why the session is over: "expired" past sessionTTL, "idle" past
+// idleTTL without a request, or "" while it is still alive.
+func (s *session) ended(now time.Time) string {
+	switch {
+	case now.After(s.expires):
+		return "expired"
+	case now.Sub(s.lastSeen) > idleTTL:
+		return "idle"
+	}
+	return ""
+}
+
 // expired reports whether the session passed sessionTTL or sat idle for idleTTL.
 func (s *session) expired(now time.Time) bool {
-	return now.After(s.expires) || now.Sub(s.lastSeen) > idleTTL
+	return s.ended(now) != ""
 }
 
 // ponytail: in-memory sessions, single instance. Swap the map for Redis if scaled out.
@@ -99,16 +112,16 @@ var sessions = struct {
 // sweepSessions drops every expired or idle session, closing its SQL pools.
 // A goroutine calls it once a minute; withSession also catches expiry on use.
 func sweepSessions(now time.Time) {
-	var dead []string
+	dead := map[string]string{} // id -> why
 	sessions.Lock()
 	for id, s := range sessions.m {
-		if s.expired(now) {
-			dead = append(dead, id)
+		if why := s.ended(now); why != "" {
+			dead[id] = why
 		}
 	}
 	sessions.Unlock()
-	for _, id := range dead {
-		dropSession(id)
+	for id, why := range dead {
+		dropSession(id, why)
 	}
 }
 
@@ -147,13 +160,15 @@ func parseIDToken(tok string) (claims, error) {
 	return c, json.Unmarshal(b, &c)
 }
 
-// dropSession removes id from sessions.m and closes any DB pools it held.
-func dropSession(id string) {
+// dropSession removes id from sessions.m and closes any DB pools it held,
+// logging a logout with why: "user", "idle", "expired" or "relogin".
+func dropSession(id, why string) {
 	sessions.Lock()
 	s := sessions.m[id]
 	delete(sessions.m, id)
 	sessions.Unlock()
 	if s != nil {
+		audit(auditEvent{Event: "logout", User: s.Email, Name: s.Name, Reason: why}, nil)
 		s.mu.Lock()
 		for _, db := range s.dbs {
 			db.Close()
@@ -214,20 +229,28 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, oauthCfg.AuthCodeURL(state, oauth2.SetAuthURLParam("prompt", "select_account")), http.StatusFound)
 }
 
+// auditLogin records a login attempt; cl names the user once the id_token got that far.
+func auditLogin(cl claims, err error) {
+	audit(auditEvent{Event: "login", User: cl.Email, Name: cl.Name}, err)
+}
+
 func handleCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	c, err := r.Cookie("oauth_state")
 	if err != nil || c.Value == "" || c.Value != q.Get("state") {
+		auditLogin(claims{}, errors.New("invalid state"))
 		http.Error(w, "invalid state", http.StatusBadRequest)
 		return
 	}
 	if e := q.Get("error"); e != "" {
+		auditLogin(claims{}, errors.New(e+": "+q.Get("error_description")))
 		http.Error(w, e+": "+q.Get("error_description"), http.StatusBadRequest)
 		return
 	}
 	tok, err := oauthCfg.Exchange(r.Context(), q.Get("code"))
 	if err != nil {
 		log.Printf("token exchange: %v", err)
+		auditLogin(claims{}, fmt.Errorf("token exchange: %w", err))
 		http.Error(w, "login failed", http.StatusBadGateway)
 		return
 	}
@@ -235,15 +258,17 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 	cl, err := parseIDToken(raw)
 	if err != nil {
 		log.Printf("id_token: %v", err)
+		auditLogin(claims{}, fmt.Errorf("id_token: %w", err))
 		http.Error(w, "login failed", http.StatusBadGateway)
 		return
 	}
 	if err := checkClaims(cl, oauthCfg.ClientID, tenantID, allowedGroup); err != nil {
+		auditLogin(cl, err)
 		http.Error(w, "access denied: "+err.Error(), http.StatusForbidden)
 		return
 	}
 	if old, err := r.Cookie("sid"); err == nil {
-		dropSession(old.Value)
+		dropSession(old.Value, "relogin")
 	}
 	id := randomID()
 	ctx := context.WithValue(context.Background(), oauth2.HTTPClient, &http.Client{Timeout: 15 * time.Second})
@@ -257,6 +282,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		dbs:      map[string]*sql.DB{},
 	}
 	sessions.Unlock()
+	auditLogin(cl, nil)
 	setCookie(w, "sid", id, "/", 0)
 	setCookie(w, "oauth_state", "", "/auth", -1)
 	http.Redirect(w, r, "/", http.StatusFound)
@@ -264,7 +290,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie("sid"); err == nil {
-		dropSession(c.Value)
+		dropSession(c.Value, "user")
 	}
 	setCookie(w, "sid", "", "/", -1)
 	w.WriteHeader(http.StatusNoContent)
@@ -289,7 +315,7 @@ func withSession(h func(http.ResponseWriter, *http.Request, *session)) http.Hand
 		}
 		sessions.Unlock()
 		if s != nil && s.expired(now) {
-			dropSession(c.Value)
+			dropSession(c.Value, s.ended(now))
 			s = nil
 		}
 		if s == nil {

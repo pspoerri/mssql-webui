@@ -47,7 +47,7 @@ func main() {
 		defaultAddr = "127.0.0.1:8080"
 	}
 	addr := env("LISTEN_ADDR", defaultAddr)
-	log.Printf("listening on %s", addr)
+	log.Printf("listening on %s; audit log on stdout", addr)
 	log.Fatal((&http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}).ListenAndServe())
 }
 

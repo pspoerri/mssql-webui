@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Audit log on stdout: every login and logout (with why a session ended), every SQL
+  connection opened and every statement, commit and rollback is written as one JSON line
+  with the user, server, database, statement text, duration, row count and the error if it
+  failed. Diagnostics stay on stderr, so a collector can take stdout as the audit stream.
+  Statements are caught at the database driver, so nothing reaches SQL Server unlogged;
+  parameter values and result contents are not recorded.
 - No-access errors say so: opening a database the user cannot access answers 403
   "you have no access to database …" instead of the raw "Login failed for user
   '<token-identified principal>'" text, and a server where the login cannot connect
