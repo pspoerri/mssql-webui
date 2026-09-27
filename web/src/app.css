@@ -183,7 +183,10 @@ th .resizer:hover { box-shadow: inset 2px 0 0 var(--accent); }
 /* SQL console */
 .console textarea { width: 100%; box-sizing: border-box; font: 13px/1.5 var(--mono); padding: 8px 10px; min-height: 8em; resize: vertical; tab-size: 4; }
 .console .toolbar { padding: 8px 0 10px; }
-.console table { margin-top: 4px; }
+.console .result { margin-bottom: 16px; overflow-x: auto; }
+.console .result > header { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12px; }
+.console .result > header button { padding: 1px 6px; font-size: 12px; }
+.console .messages { font: 12px/1.5 var(--mono); background: var(--bg-2); padding: 8px 12px; margin: 0 0 10px; border-radius: 4px; white-space: pre-wrap; }
 
 /* Help */
 .help { max-width: 64ch; font-size: 14px; line-height: 1.55; }

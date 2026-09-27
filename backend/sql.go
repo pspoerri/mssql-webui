@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/golang-sql/sqlexp"
 	mssql "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
 	"golang.org/x/oauth2"
@@ -993,6 +994,13 @@ func handleCSV(w http.ResponseWriter, r *http.Request, s *session) {
 		return
 	}
 	defer rows.Close()
+	writeCSV(w, rows, r.PathValue("schema")+"."+r.PathValue("table")+".csv")
+}
+
+// writeCSV streams the current result set of rows as a CSV download. Past
+// the headers an error aborts the connection, so the browser reports a
+// failed download instead of saving a truncated file.
+func writeCSV(w http.ResponseWriter, rows *sql.Rows, filename string) {
 	cols, err := rows.Columns()
 	if err != nil {
 		fail(w, err)
@@ -1004,7 +1012,7 @@ func handleCSV(w http.ResponseWriter, r *http.Request, s *session) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", r.PathValue("schema")+"."+r.PathValue("table")+".csv"))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	cw := csv.NewWriter(w)
 	cw.Write(cols)
 	vals := make([]any, len(cols))
@@ -1014,8 +1022,7 @@ func handleCSV(w http.ResponseWriter, r *http.Request, s *session) {
 		ptrs[i] = &vals[i]
 	}
 	abort := func(err error) {
-		// Headers are already out; abort the connection so the browser reports a failed download instead of a truncated file.
-		log.Printf("csv %s: %v", objName(r), err)
+		log.Printf("csv %s: %v", filename, err)
 		panic(http.ErrAbortHandler)
 	}
 	for rows.Next() {
@@ -1095,6 +1102,17 @@ func handleBatch(w http.ResponseWriter, r *http.Request, s *session) {
 // handleQuery runs ad-hoc SQL.
 // ponytail: SELECT/WITH return the first result set, anything else returns
 // rows affected. Multiple result sets are dropped; add NextResultSet if needed.
+// maxConsoleRows caps each result set the console returns; the rest is read
+// and dropped so the statements after it still run.
+const maxConsoleRows = 1000
+
+// handleQuery runs a console batch and reports everything it produced, in
+// order: result sets, rows-affected counts and PRINT/info messages, like
+// SSMS. A SQL error answers 400 but keeps the results before it. With
+// ?format=csv&set=N the Nth result set (from 0) is streamed as a CSV
+// download instead, all of its rows.
+// The batch runs on its own connection so a transaction it leaves open can
+// be rolled back here, rather than holding locks until the pool reuses it.
 func handleQuery(w http.ResponseWriter, r *http.Request, s *session) {
 	db, err := s.db(r.Context(), r.PathValue("srv"), r.PathValue("db"))
 	if err != nil {
@@ -1108,27 +1126,88 @@ func handleQuery(w http.ResponseWriter, r *http.Request, s *session) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json: " + err.Error()})
 		return
 	}
-	q := strings.ToUpper(strings.TrimSpace(body.SQL))
-	if strings.HasPrefix(q, "SELECT") || strings.HasPrefix(q, "WITH") {
-		rows, err := db.QueryContext(r.Context(), body.SQL)
-		if err != nil {
-			fail(w, err)
-			return
-		}
-		defer rows.Close()
-		cols, data, err := readRows(rows, 1000)
-		if err != nil {
-			fail(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"columns": cols, "rows": data})
-		return
-	}
-	res, err := db.ExecContext(r.Context(), body.SQL)
+	ctx := r.Context()
+	conn, err := db.Conn(ctx)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	n, _ := res.RowsAffected()
-	writeJSON(w, http.StatusOK, map[string]int64{"rowsAffected": n})
+	defer conn.Close()
+	msg := &sqlexp.ReturnMessage{}
+	rows, err := conn.QueryContext(ctx, body.SQL, msg)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	asCSV := r.URL.Query().Get("format") == "csv"
+	set, _ := strconv.Atoi(r.URL.Query().Get("set"))
+	results, messages, errs := []map[string]any{}, []string{}, []string{}
+	afterSet := false // a SELECT's rows-affected count follows its result set; that one is not shown
+	for active := true; active; {
+		switch m := msg.Message(ctx).(type) {
+		case sqlexp.MsgNotice:
+			messages = append(messages, m.Message.String())
+		case sqlexp.MsgNext:
+			if asCSV {
+				if set == 0 {
+					writeCSV(w, rows, "query.csv")
+					rows.Close()
+					return
+				}
+				set--
+				for rows.Next() {
+				}
+				continue
+			}
+			cols, data, err := readRows(rows, maxConsoleRows)
+			truncated := false
+			if len(data) == maxConsoleRows { // drain the rest; Next again after it said false loses what follows
+				for rows.Next() {
+					truncated = true
+				}
+			}
+			if err != nil {
+				errs = append(errs, err.Error())
+			}
+			results = append(results, map[string]any{"columns": cols, "rows": data, "truncated": truncated})
+			afterSet = true
+		case sqlexp.MsgRowsAffected:
+			if !afterSet {
+				results = append(results, map[string]any{"rowsAffected": m.Count})
+			}
+			afterSet = false
+		case sqlexp.MsgError:
+			var me mssql.Error
+			if errors.As(m.Error, &me) {
+				errs = append(errs, sqlMessages(me))
+			} else {
+				errs = append(errs, m.Error.Error())
+			}
+		case sqlexp.MsgNextResultSet:
+			active = rows.NextResultSet()
+		}
+	}
+	if err := rows.Close(); err != nil && len(errs) == 0 {
+		errs = append(errs, err.Error())
+	}
+	var open int
+	if err := conn.QueryRowContext(context.WithoutCancel(ctx), "SELECT @@TRANCOUNT").Scan(&open); err == nil && open > 0 {
+		conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
+		errs = append(errs, "the batch left a transaction open, so it was rolled back; put COMMIT (or ROLLBACK) in the same batch")
+	}
+	if asCSV {
+		msg := "the query returned no such result set to download"
+		if len(errs) > 0 {
+			msg = strings.Join(errs, "\n")
+		}
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
+	}
+	out := map[string]any{"results": results, "messages": messages}
+	if len(errs) > 0 {
+		out["error"] = strings.Join(errs, "\n")
+		writeJSON(w, http.StatusBadRequest, out)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }

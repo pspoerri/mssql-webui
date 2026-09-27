@@ -5,7 +5,8 @@ export type ColumnInfo = { name: string; type: string; nullable: boolean; identi
 export type TableMeta = { columns: ColumnInfo[]; pk: string[] }
 export type Cell = string | number | boolean | null
 export type RowsPage = { columns: string[]; rows: Cell[][]; hasMore: boolean }
-export type QueryResult = { columns: string[]; rows: Cell[][] } | { rowsAffected: number }
+export type ResultSet = { columns: string[]; rows: Cell[][]; truncated: boolean }
+export type QueryResult = { results: (ResultSet | { rowsAffected: number })[]; messages: string[]; error?: string }
 export type Selection = { srv: string; db: string; table?: TableInfo; console?: boolean }
 
 export const enc = encodeURIComponent
@@ -43,6 +44,17 @@ export function upload<T>(path: string, file: Blob, onProgress?: (sent: number, 
   })
 }
 
+// POST JSON and save the answer as a file, e.g. a console result as CSV.
+export async function download(path: string, body: unknown, filename: string): Promise<void> {
+  const res = await send(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  if (!res.ok) return handle(res)
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(await res.blob())
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
+}
+
 // Requests waiting for a paused serverless database to resume. App shows the
 // server's message while any are waiting.
 let waiting = 0
@@ -78,7 +90,7 @@ async function send(path: string, init?: RequestInit): Promise<Response> {
   }
 }
 
-export type HttpError = Error & { status: number }
+export type HttpError = Error & { status: number; data: Record<string, unknown> }
 
 async function handle<T>(res: Response): Promise<T> {
   if (res.status === 401) {
@@ -86,7 +98,7 @@ async function handle<T>(res: Response): Promise<T> {
     throw new Error('not logged in')
   }
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw Object.assign(new Error(data.error || httpError(res)), { status: res.status }) as HttpError
+  if (!res.ok) throw Object.assign(new Error(data.error || httpError(res)), { status: res.status, data }) as HttpError
   return data as T
 }
 

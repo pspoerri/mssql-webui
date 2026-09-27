@@ -151,7 +151,7 @@ cp .env.example .env   # fill in the values; make exports them
 make dev               # backend on :8080, Vite on :5173 (proxies /api and /auth)
 ```
 
-`make help` shows every target: `dev`, `build`, `test`, `image`, `run`, `clean`.
+`make help` shows every target: `dev`, `build`, `test`, `e2e`, `image`, `run`, `clean`.
 
 ## Dev mode (no Entra)
 
@@ -181,6 +181,19 @@ The Entra token path is the one thing dev mode does not exercise.
 make test    # go vet, go test, tsc
 make build   # ./mssql-webui with the UI embedded; version from git describe (VERSION=... to override)
 ```
+
+## End-to-end tests
+
+`make e2e` builds `./mssql-webui`, starts it in dev mode on a free port and
+drives it with a headless Chromium (playwright-core; the first run downloads
+it) through a data steward's day with an existing database: find it in the
+tree, browse, search, sort and deep-link, edit/add/delete rows, see a rejected
+value's error, view definitions, download CSV, import and append CSV (with a
+broken file and a proxy's 413), the resuming-database notice, and the SQL
+console. It needs a SQL Server: `make run-sqlserver` in another terminal. The
+database `steward_e2e` is dropped and rebuilt from `docs/ddl-cases.sql` on
+every run. `E2E_SQL_SERVERS`, `E2E_BIN` and `E2E_CHROMIUM` (a browser
+executable) override the defaults; the tests are in `web/e2e/`.
 
 ## Container image (Docker or Podman)
 

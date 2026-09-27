@@ -156,7 +156,10 @@ function Help() {
         <li>Tables without a primary key are append-only; views are read-only.</li>
         <li>The focused cell is also shown in an editor above the table, handy for long values. <kbd>Esc</kbd> (or Revert there)
           undoes that cell's change and leaves it; Discard undoes everything.</li>
-        <li>The SQL console runs ad-hoc statements against the selected database.</li>
+        <li>The SQL console runs a batch against the selected database and shows everything it returns in order: each result
+          set (the first 1000 rows), rows-affected counts, PRINT messages and errors. <b>Download CSV</b> on a result runs the
+          batch again and saves all of that result's rows; a batch that changed data asks first. A transaction left open by a
+          batch is rolled back.</li>
       </ul>
       <p>Source code, issues and documentation: <a href="https://github.com/pspoerri/mssql-webui" target="_blank" rel="noreferrer">github.com/pspoerri/mssql-webui</a></p>
     </div>

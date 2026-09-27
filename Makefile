@@ -14,7 +14,7 @@ SEED_DB ?= master
 
 .DEFAULT_GOAL := help
 
-.PHONY: help dev dev-backend dev-web build test image run run-sqlserver seed clean
+.PHONY: help dev dev-backend dev-web build test e2e image run run-sqlserver seed clean
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -35,6 +35,9 @@ build: ## Build the frontend and the single binary ./mssql-webui
 test: ## go vet + go test, tsc typecheck, node tests
 	cd backend && go vet ./... && go test ./...
 	cd web && pnpm install && pnpm exec tsc -b && node --test 'src/**/*.test.ts'
+
+e2e: build ## Browser tests of a data steward's day against make run-sqlserver (SQL_SERVERS from .env, else the run-sqlserver default)
+	cd web && pnpm exec playwright-core install --only-shell chromium && node --test 'e2e/*.test.ts'
 
 image: ## Build the container image mssql-webui (CONTAINER=docker|podman)
 	$(CONTAINER) build --build-arg VERSION=$(VERSION) -t $(BIN) .

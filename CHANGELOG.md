@@ -14,6 +14,16 @@
 - A paused serverless database no longer holds requests for up to two minutes: the server
   answers 503 at once and the UI shows "database … is paused and resuming" in the header
   while it retries.
+- SQL console shows every result of a batch in order, like SSMS: each result set, rows-affected
+  counts, PRINT messages and the error with the results before it. Before, only batches starting
+  with SELECT/WITH showed rows (not one starting with a comment, DECLARE or EXEC), later errors
+  in a batch were hidden, and a result over 1000 rows could silently cancel the statements after
+  it. Each result set has a Download CSV button for all its rows (it runs the batch again, and
+  asks first if the batch changed data). A transaction a batch leaves open is rolled back and
+  reported instead of holding its locks.
+- End-to-end tests: `make e2e` drives the app in headless Chromium through a data steward's
+  workflow on an existing database (browse, search, edit, definitions, CSV export/import, console,
+  resuming database) against `make run-sqlserver`.
 - Errors from a proxy in front of the app (e.g. 413 for an upload over its size limit, 504
   for a timeout) are shown with their status instead of an empty message.
 
