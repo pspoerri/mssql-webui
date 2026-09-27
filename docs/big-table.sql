@@ -1,5 +1,6 @@
 -- Test data: dbo.big with 20 columns of mixed types and 2000 rows.
--- Run in the SQL console of the target database (or: make dev, then paste).
+-- Run in the SQL console of the target database (or: make dev, then paste). Re-runnable.
+DROP TABLE IF EXISTS dbo.big;
 CREATE TABLE dbo.big (
   id         INT IDENTITY PRIMARY KEY,
   name       NVARCHAR(50) NOT NULL,

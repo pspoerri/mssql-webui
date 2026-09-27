@@ -163,7 +163,7 @@ localhost only by default, and it refuses to start if Entra variables
 
 ```bash
 make run-sqlserver   # foreground SQL Server 2022 on :1433, sa / Dev_Passw0rd (override with SA_PASSWORD=...); Ctrl-C stops it
-make seed            # load docs/*.sql (sample tables) into it; SEED_DB=... picks the database
+make seed            # load docs/*.sql (sample tables) into database demo (created if missing); SEED_DB=... picks another
 # in .env: DEV_USER=dev and SQL_SERVERS='sqlserver://sa:Dev_Passw0rd@localhost:1433?trustservercertificate=true'
 make dev
 ```

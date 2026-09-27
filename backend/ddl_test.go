@@ -11,17 +11,17 @@ func TestRenderDDL(t *testing.T) {
 		{"every clause", tableDef{
 			Schema: "dbo", Name: "order",
 			Cols: []ddlCol{
-				{Name: "id", Type: "int", Identity: true, Seed: 1, Inc: 1},
+				{Name: "id", Type: "int", Identity: true, Seed: "1", Inc: "1"},
 				{Name: "name", Type: "nvarchar(50)", Collation: "Latin1_General_CS_AS", Nullable: true, DefaultName: "DF_order_name", Default: "('x')"},
-				{Name: "total", Computed: "([a]+[b])", Persisted: true},
+				{Name: "total", Computed: "([a]+[b])", Persisted: true, Nullable: true},
 				{Name: "uid", Type: "int"},
 			},
 			Indexes: []ddlIndex{
-				{Name: "PK_order", PK: true, Unique: true, Clustered: true, Cols: []string{"id"}},
-				{Name: "UQ_order_name", UniqueConstraint: true, Unique: true, Cols: []string{"name"}},
-				{Name: "IX_order_uid", Cols: []string{"uid DESC"}, Include: []string{"name"}, Filter: "([uid]>(0))"},
+				{Name: "PK_order", PK: true, Unique: true, Clustered: true, Cols: []string{"[id]"}},
+				{Name: "UQ_order_name", UniqueConstraint: true, Unique: true, Cols: []string{"[name]"}},
+				{Name: "IX_order_uid", Cols: []string{"[uid] DESC"}, Include: []string{"[name]"}, Filter: "([uid]>(0))"},
 			},
-			FKs:    []ddlFK{{Name: "FK_order_user", RefTable: "[dbo].[user]", Cols: []string{"uid"}, RefCols: []string{"id"}, OnDelete: "CASCADE", OnUpdate: "NO_ACTION"}},
+			FKs:    []ddlFK{{Name: "FK_order_user", RefTable: "[dbo].[user]", Cols: []string{"[uid]"}, RefCols: []string{"[id]"}, OnDelete: "CASCADE", OnUpdate: "NO_ACTION"}},
 			Checks: []ddlCheck{{Name: "CK_order", Expr: "([uid]>(0))"}},
 		}, `CREATE TABLE [dbo].[order] (
     [id] int IDENTITY(1,1) NOT NULL,
@@ -50,23 +50,47 @@ CREATE NONCLUSTERED INDEX [IX_order_uid] ON [dbo].[order] ([uid] DESC) INCLUDE (
 				{Name: "customer_id", Type: "int", Nullable: true},
 				{Name: "order_no", Type: "int", Nullable: true},
 				{Name: "year", Computed: "(datepart(year,[placed]))"},
-				{Name: "email", Type: "email_t", Nullable: true},
+				{Name: "email", Type: "[dbo].[email_t]", Nullable: true},
 			},
 			Indexes: []ddlIndex{
-				{Name: "PK_line", PK: true, Unique: true, Cols: []string{"customer_id", "order_no"}},
-				{Name: "CX_line", Unique: true, Clustered: true, Cols: []string{"order_no", "customer_id DESC"}},
+				{Name: "PK_line", PK: true, Unique: true, Cols: []string{"[customer_id]", "[order_no]"}},
+				{Name: "CX_line", Unique: true, Clustered: true, Cols: []string{"[order_no]", "[customer_id] DESC"}},
 			},
-			FKs: []ddlFK{{Name: "FK_line_order", RefTable: "[dbo].[order]", Cols: []string{"customer_id", "order_no"}, RefCols: []string{"customer_id", "order_no"}, OnDelete: "SET_NULL", OnUpdate: "SET_DEFAULT"}},
+			FKs: []ddlFK{{Name: "FK_line_order", RefTable: "[dbo].[order]", Cols: []string{"[customer_id]", "[order_no]"}, RefCols: []string{"[customer_id]", "[order_no]"}, OnDelete: "SET_NULL", OnUpdate: "SET_DEFAULT"}},
 		}, `CREATE TABLE [dbo].[line]]x] (
     [customer_id] int NULL,
     [order_no] int NULL,
     [year] AS (datepart(year,[placed])),
-    [email] email_t NULL,
+    [email] [dbo].[email_t] NULL,
     CONSTRAINT [PK_line] PRIMARY KEY NONCLUSTERED ([customer_id], [order_no]),
     CONSTRAINT [FK_line_order] FOREIGN KEY ([customer_id], [order_no]) REFERENCES [dbo].[order] ([customer_id], [order_no]) ON DELETE SET NULL ON UPDATE SET DEFAULT
 );
 
 CREATE UNIQUE CLUSTERED INDEX [CX_line] ON [dbo].[line]]x] ([order_no], [customer_id] DESC);
+`},
+		{"notes, disabled constraints, IGNORE_DUP_KEY, persisted NOT NULL", tableDef{
+			Schema: "dbo", Name: "t",
+			Cols: []ddlCol{
+				{Name: "first name", Type: "int"},
+				{Name: "k", Computed: "([first name]*(2))", Persisted: true},
+			},
+			Indexes: []ddlIndex{{Name: "UX_t", Unique: true, IgnoreDup: true, Disabled: true, Cols: []string{"[first name]"}}},
+			Checks:  []ddlCheck{{Name: "CK_t", Expr: "([first name]>(0))", Disabled: true}},
+			Notes:   []string{"system versioning", "foreign keys referencing tables you cannot see: FK_x"},
+		}, `-- Incomplete: this script leaves out
+--   system versioning
+--   foreign keys referencing tables you cannot see: FK_x
+
+CREATE TABLE [dbo].[t] (
+    [first name] int NOT NULL,
+    [k] AS ([first name]*(2)) PERSISTED NOT NULL,
+    CONSTRAINT [CK_t] CHECK ([first name]>(0))
+);
+
+CREATE UNIQUE NONCLUSTERED INDEX [UX_t] ON [dbo].[t] ([first name]) WITH (IGNORE_DUP_KEY = ON);
+
+ALTER INDEX [UX_t] ON [dbo].[t] DISABLE;
+ALTER TABLE [dbo].[t] NOCHECK CONSTRAINT [CK_t];
 `},
 	}
 	for _, c := range cases {

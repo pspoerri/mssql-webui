@@ -9,8 +9,8 @@ LDFLAGS := -X main.version=$(VERSION)
 CONTAINER ?= $(shell command -v docker >/dev/null 2>&1 && echo docker || echo podman)
 # sa password for `make run-sqlserver`
 SA_PASSWORD ?= Dev_Passw0rd
-# database that `make seed` loads docs/*.sql into
-SEED_DB ?= master
+# database that `make seed` creates if needed and loads docs/*.sql into
+SEED_DB ?= demo
 
 .DEFAULT_GOAL := help
 
@@ -49,8 +49,9 @@ run-sqlserver: ## Run a local SQL Server 2022 in the foreground on :1433 (sa / S
 	@echo "SQL_SERVERS='sqlserver://sa:$(SA_PASSWORD)@localhost:1433?trustservercertificate=true'"
 	$(CONTAINER) run --rm --name mssql-webui-sql --platform linux/amd64 -p 1433:1433 -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD='$(SA_PASSWORD)' mcr.microsoft.com/mssql/server:2022-latest
 
-seed: ## Load docs/*.sql (sample tables) into SEED_DB (default master) of the run-sqlserver container
-	for f in docs/*.sql; do echo "== $$f"; $(CONTAINER) exec -i mssql-webui-sql /opt/mssql-tools18/bin/sqlcmd -C -b -U sa -P '$(SA_PASSWORD)' -d $(SEED_DB) < $$f || exit 1; done
+seed: ## Load docs/*.sql (sample tables) into SEED_DB (default demo, created if missing) of the run-sqlserver container
+	$(CONTAINER) exec mssql-webui-sql /opt/mssql-tools18/bin/sqlcmd -C -b -U sa -P '$(SA_PASSWORD)' -Q "IF DB_ID(N'$(SEED_DB)') IS NULL CREATE DATABASE [$(SEED_DB)]"
+	for f in docs/*.sql; do echo "== $$f"; $(CONTAINER) exec -i mssql-webui-sql /opt/mssql-tools18/bin/sqlcmd -C -I -b -U sa -P '$(SA_PASSWORD)' -d "$(SEED_DB)" < $$f || exit 1; done
 
 clean: ## Remove the binary and built frontend assets
 	rm -f $(BIN)

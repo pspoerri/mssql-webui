@@ -132,6 +132,8 @@ main > :not(.grid) { padding: 16px 20px; box-sizing: border-box; }
 .grid table { margin: 0 16px; }
 .grid .more { margin: 8px 16px; color: var(--muted); font-size: 12px; }
 .grid .error { margin: 0 16px 8px; }
+/* Messages above the rows stay in view and wrap at the viewport, not at the grid's width. */
+.grid > .error, .grid > .ddl { position: sticky; left: 16px; max-width: calc(100vw - var(--nav-w) - 32px); box-sizing: border-box; }
 .top { position: sticky; top: 0; left: 0; z-index: 3; background: var(--bg); padding: 10px 16px 0; width: calc(100vw - var(--nav-w)); box-sizing: border-box; }
 .toolbar { display: flex; gap: 8px; align-items: center; padding-bottom: 10px; }
 .toolbar form { position: relative; flex: 1; min-width: 160px; max-width: 520px; }
@@ -140,7 +142,7 @@ main > :not(.grid) { padding: 16px 20px; box-sizing: border-box; }
 .toolbar .count { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .toolbar .actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 .toolbar .actions button.on { background: var(--bg-3); color: var(--accent); }
-.ddl { font: 12px/1.5 var(--mono); background: var(--bg-2); padding: 10px 12px; margin: 0 0 10px; border-radius: 4px; overflow-x: auto; }
+.ddl { font: 12px/1.5 var(--mono); background: var(--bg-2); padding: 10px 12px; margin: 0 16px 10px; border-radius: 4px; overflow: auto; max-height: 50vh; }
 .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 1px 6px; white-space: nowrap; }
 .fieldbar { display: flex; gap: 8px; align-items: flex-start; padding-bottom: 10px; }
 .fieldbar label { padding-top: 5px; white-space: nowrap; font-size: 12px; }

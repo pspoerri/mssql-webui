@@ -21,6 +21,20 @@
   it. Each result set has a Download CSV button for all its rows (it runs the batch again, and
   asks first if the batch changed data). A transaction a batch leaves open is rolled back and
   reported instead of holding its locks.
+- Definition panel (unreleased since v0.5.0) fixed after a review against a live server: a user
+  with only SELECT got a 500 on any table with a CHECK and otherwise a script that silently
+  dropped defaults, index filters and computed expressions; these are now listed as hidden in a
+  header comment. Key, INCLUDE and foreign-key columns with spaces in their names are quoted
+  correctly; alias types are schema-qualified; the partitioning column no longer appears as a key
+  column; hypothetical indexes are skipped; disabled indexes and constraints, IGNORE_DUP_KEY and
+  PERSISTED NOT NULL are scripted; IDENTITY seeds beyond bigint work; a foreign key to a table the
+  user cannot see is named instead of vanishing; temporal, graph, ledger, memory-optimized,
+  partitioned and sparse tables, typed XML and columnstore/XML/spatial indexes are named in the
+  header instead of being scripted as if they were plain. The panel shows Loading…, ignores a
+  second click, and stays within the window; long errors above the grid wrap instead of running
+  off the right edge.
+- `make seed` creates and fills database `demo` instead of `master`, runs sqlcmd with
+  QUOTED_IDENTIFIER on (the filtered index failed without it) and can be re-run.
 - End-to-end tests: `make e2e` drives the app in headless Chromium through a data steward's
   workflow on an existing database (browse, search, edit, definitions, CSV export/import, console,
   resuming database) against `make run-sqlserver`.

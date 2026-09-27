@@ -31,7 +31,7 @@ export function TableView({ srv, db, table, onDirty }: Props) {
   const [added, setAdded] = useState<Values[]>([])
   const [focus, setFocus] = useState<Focus | null>(null)
   const [err, setErr] = useState('')
-  const [ddl, setDdl] = useState<string | null>(null) // the CREATE statement; null = panel closed
+  const [ddl, setDdl] = useState<string | null>(null) // the CREATE statement; null = panel closed, '' = loading
   const gen = useRef(0) // bumps when q changes so a late page from the previous search is dropped
   const sentinel = useRef<HTMLDivElement>(null)
   const tableRef = useRef<HTMLTableElement>(null)
@@ -286,6 +286,15 @@ export function TableView({ srv, db, table, onDirty }: Props) {
     }
   }
 
+  // Closing while it loads drops the late answer instead of reopening the panel.
+  const toggleDdl = () => {
+    if (ddl !== null) return setDdl(null)
+    setDdl('')
+    api<{ ddl: string }>(`${base}/ddl`)
+      .then((r) => { setDdl((d) => (d === '' ? r.ddl : d)); setErr('') })
+      .catch((e) => { setDdl(null); setErr(e.message) })
+  }
+
   if (!page) return err ? <div className="error">{err}</div> : <p className="note">Loading…</p>
 
   const focusValue = focus ? cellValue(focus) : null
@@ -306,7 +315,7 @@ export function TableView({ srv, db, table, onDirty }: Props) {
           {isTable ? meta && !editable && <span className="tag">No primary key: append-only</span> : <span className="tag">View: read-only</span>}
           <div className="actions">
             <button className={ddl !== null ? 'on' : ''} aria-pressed={ddl !== null} title="Show the CREATE statement"
-              onClick={() => ddl !== null ? setDdl(null) : api<{ ddl: string }>(`${base}/ddl`).then((r) => setDdl(r.ddl)).catch((e) => setErr(e.message))}>Definition</button>
+              onClick={toggleDdl}>Definition</button>
             <a className="btn" href={`${base}/csv`} download={`${table.schema}.${table.name}.csv`}>Download CSV</a>
             {isTable && (
               <>
@@ -348,7 +357,7 @@ export function TableView({ srv, db, table, onDirty }: Props) {
         )}
       </div>
       {err && <div className="error">{err}</div>}
-      {ddl !== null && <pre className="ddl">{ddl || '-- no definition available'}</pre>}
+      {ddl !== null && <pre className="ddl">{ddl || 'Loading…'}</pre>}
       <table ref={tableRef} style={{ width: (isTable ? CTL : 0) + page.columns.reduce((n, c) => n + width(c), 0) }}>
         <colgroup>
           {isTable && <col style={{ width: CTL }} />}
