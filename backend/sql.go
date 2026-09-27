@@ -1133,6 +1133,17 @@ func handleQuery(w http.ResponseWriter, r *http.Request, s *session) {
 		return
 	}
 	defer conn.Close()
+	// A transaction the batch leaves open (no COMMIT, or a CSV download that
+	// stopped the batch after its result set) is rolled back here, on every
+	// path; otherwise it would go back to the pool holding its locks.
+	var leftOpenCount int
+	defer func() {
+		ctx := context.WithoutCancel(ctx)
+		var open int
+		if conn.QueryRowContext(ctx, "SELECT @@TRANCOUNT").Scan(&open) == nil && open > 0 {
+			conn.ExecContext(ctx, "ROLLBACK")
+		}
+	}()
 	msg := &sqlexp.ReturnMessage{}
 	rows, err := conn.QueryContext(ctx, body.SQL, msg)
 	if err != nil {
@@ -1190,9 +1201,7 @@ func handleQuery(w http.ResponseWriter, r *http.Request, s *session) {
 	if err := rows.Close(); err != nil && len(errs) == 0 {
 		errs = append(errs, err.Error())
 	}
-	var open int
-	if err := conn.QueryRowContext(context.WithoutCancel(ctx), "SELECT @@TRANCOUNT").Scan(&open); err == nil && open > 0 {
-		conn.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
+	if conn.QueryRowContext(ctx, "SELECT @@TRANCOUNT").Scan(&leftOpenCount) == nil && leftOpenCount > 0 {
 		errs = append(errs, "the batch left a transaction open, so it was rolled back; put COMMIT (or ROLLBACK) in the same batch")
 	}
 	if asCSV {
