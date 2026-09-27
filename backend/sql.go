@@ -300,6 +300,7 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/s/{srv}/databases", withSession(handleCreateDatabase))
 	mux.HandleFunc("POST /api/s/{srv}/d/{db}/schemas", withSession(handleCreateSchema))
 	mux.HandleFunc("GET /api/s/{srv}/d/{db}/t/{schema}/{table}", withSession(handleColumns))
+	mux.HandleFunc("GET /api/s/{srv}/d/{db}/t/{schema}/{table}/ddl", withSession(handleDDL))
 	mux.HandleFunc("GET /api/s/{srv}/d/{db}/t/{schema}/{table}/rows", withSession(handleRows))
 	mux.HandleFunc("GET /api/s/{srv}/d/{db}/t/{schema}/{table}/csv", withSession(handleCSV))
 	mux.HandleFunc("POST /api/s/{srv}/d/{db}/t/{schema}/{table}/csv", withSession(handleImportCSV))

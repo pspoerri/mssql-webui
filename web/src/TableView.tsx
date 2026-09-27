@@ -31,6 +31,7 @@ export function TableView({ srv, db, table, onDirty }: Props) {
   const [added, setAdded] = useState<Values[]>([])
   const [focus, setFocus] = useState<Focus | null>(null)
   const [err, setErr] = useState('')
+  const [ddl, setDdl] = useState<string | null>(null) // the CREATE statement; null = panel closed
   const gen = useRef(0) // bumps when q changes so a late page from the previous search is dropped
   const sentinel = useRef<HTMLDivElement>(null)
   const tableRef = useRef<HTMLTableElement>(null)
@@ -304,6 +305,8 @@ export function TableView({ srv, db, table, onDirty }: Props) {
           <span className="count">{page.rows.length}{page.hasMore ? '+' : ''} rows</span>
           {isTable ? meta && !editable && <span className="tag">No primary key: append-only</span> : <span className="tag">View: read-only</span>}
           <div className="actions">
+            <button className={ddl !== null ? 'on' : ''} aria-pressed={ddl !== null} title="Show the CREATE statement"
+              onClick={() => ddl !== null ? setDdl(null) : api<{ ddl: string }>(`${base}/ddl`).then((r) => setDdl(r.ddl)).catch((e) => setErr(e.message))}>Definition</button>
             <a className="btn" href={`${base}/csv`} download={`${table.schema}.${table.name}.csv`}>Download CSV</a>
             {isTable && (
               <>
@@ -345,6 +348,7 @@ export function TableView({ srv, db, table, onDirty }: Props) {
         )}
       </div>
       {err && <div className="error">{err}</div>}
+      {ddl !== null && <pre className="ddl">{ddl || '-- no definition available'}</pre>}
       <table ref={tableRef} style={{ width: (isTable ? CTL : 0) + page.columns.reduce((n, c) => n + width(c), 0) }}>
         <colgroup>
           {isTable && <col style={{ width: CTL }} />}

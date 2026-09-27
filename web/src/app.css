@@ -127,6 +127,8 @@ main > :not(.grid) { padding: 16px 20px; box-sizing: border-box; }
 .toolbar input[type=search] { width: 100%; box-sizing: border-box; padding-left: 28px; }
 .toolbar .count { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .toolbar .actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+.toolbar .actions button.on { background: var(--bg-3); color: var(--accent); }
+.ddl { font: 12px/1.5 var(--mono); background: var(--bg-2); padding: 10px 12px; margin: 0 0 10px; border-radius: 4px; overflow-x: auto; }
 .tag { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 1px 6px; white-space: nowrap; }
 .fieldbar { display: flex; gap: 8px; align-items: flex-start; padding-bottom: 10px; }
 .fieldbar label { padding-top: 5px; white-space: nowrap; font-size: 12px; }
