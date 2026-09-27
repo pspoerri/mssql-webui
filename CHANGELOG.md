@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.6.0 — 2026-09-27
 
 - CSV import handles files of millions of rows: the upload returns at once and the import
   runs as a background job, shown in the sidebar with upload percentage, type-check and
