@@ -67,6 +67,44 @@ func whereClause(key map[string]any, args []any) (string, []any) {
 	return strings.Join(conds, " AND "), args
 }
 
+// decodeBinary turns the base64 text the grid shows for binary columns back
+// into bytes, in keys, set values and inserts alike. Bound as text, a binary
+// key never matches, so every edit of such a table failed as "no row matched".
+func decodeBinary(b batch, names, types []string) error {
+	binary := map[string]bool{}
+	for i, t := range types {
+		binary[names[i]] = t == "BINARY" || t == "VARBINARY" || t == "IMAGE"
+	}
+	decode := func(m map[string]any) error {
+		for c, v := range m {
+			if str, ok := v.(string); ok && binary[c] {
+				raw, err := base64.StdEncoding.DecodeString(str)
+				if err != nil {
+					return fmt.Errorf("column %q: value must be base64", c)
+				}
+				m[c] = raw
+			}
+		}
+		return nil
+	}
+	for _, m := range b.Inserts {
+		if err := decode(m); err != nil {
+			return err
+		}
+	}
+	for _, u := range b.Updates {
+		if err := errors.Join(decode(u.Key), decode(u.Set)); err != nil {
+			return err
+		}
+	}
+	for _, k := range b.Deletes {
+		if err := decode(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // buildBatch turns an edit batch into parameterized statements against
 // [schema].[table]. Updates and deletes without a key are refused so a bad
 // client can never touch every row.
@@ -129,6 +167,8 @@ var (
 	servers     map[string]serverEntry // by display name (host)
 	serverNames []string
 	errNotFound = errors.New("not found")
+	// errSessionEnded: the session was dropped while a request on it ran.
+	errSessionEnded = errors.New("session ended")
 )
 
 func initSQL() {
@@ -199,6 +239,10 @@ func (s *session) db(ctx context.Context, srv, dbName string) (*sql.DB, error) {
 	cfg := entry.cfg
 	key := srv + "/" + dbName
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, errSessionEnded
+	}
 	if d, ok := s.dbs[key]; ok {
 		s.mu.Unlock()
 		if err := d.PingContext(ctx); err != nil {
@@ -229,6 +273,18 @@ func (s *session) db(ctx context.Context, srv, dbName string) (*sql.DB, error) {
 	s.dbs[key] = d
 	s.mu.Unlock()
 	if err := d.PingContext(ctx); err != nil {
+		// A first connect that failed (no such database, no access, resuming)
+		// keeps no pool: each one holds a goroutine, and any name in a URL
+		// would otherwise add one for the session's lifetime. A canceled
+		// request says nothing about the database, so its pool stays.
+		if ctx.Err() == nil {
+			s.mu.Lock()
+			if s.dbs[key] == d {
+				delete(s.dbs, key)
+			}
+			s.mu.Unlock()
+			d.Close()
+		}
 		return nil, wrapConnect(err, dbName)
 	}
 	return d, nil
@@ -285,7 +341,7 @@ func fail(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
-	case errors.As(err, &re):
+	case errors.As(err, &re), errors.Is(err, errSessionEnded):
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "session expired"})
 	case errors.As(err, &ae):
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": ae.Error()})
@@ -1065,6 +1121,15 @@ func handleBatch(w http.ResponseWriter, r *http.Request, s *session) {
 	var b batch
 	if err := json.NewDecoder(r.Body).Decode(&b); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad json: " + err.Error()})
+		return
+	}
+	names, types, err := columnTypes(r.Context(), db, objName(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := decodeBinary(b, names, types); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	stmts, err := buildBatch(r.PathValue("schema"), r.PathValue("table"), b)

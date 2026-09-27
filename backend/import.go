@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -106,6 +107,7 @@ type csvColumn struct {
 	kinds  int
 	maxLen int  // in UTF-16 code units, what nvarchar(n) counts
 	seen   bool // any non-empty value
+	binary bool // append into a binary or CLR column: the text is base64, as CSV export writes it
 }
 
 // nvarchar sizes are rounded up so the table has room for later, longer values.
@@ -260,13 +262,16 @@ func sniffDelim(data []byte) rune {
 type tableCol struct {
 	Name     string
 	Writable bool
+	Binary   bool // binary, varbinary, image or a CLR type: exported as base64
 }
 
 // writableColumns lists obj's columns in order; errNotFound if obj does not exist.
 func writableColumns(ctx context.Context, db *sql.DB, obj string) ([]tableCol, error) {
 	rows, err := db.QueryContext(ctx, `SELECT c.name,
-		CASE WHEN c.is_identity = 1 OR c.is_computed = 1 OR TYPE_NAME(c.system_type_id) = 'timestamp' THEN 0 ELSE 1 END
-		FROM sys.columns c WHERE c.object_id = OBJECT_ID(@p1) ORDER BY c.column_id`, obj)
+		CASE WHEN c.is_identity = 1 OR c.is_computed = 1 OR TYPE_NAME(c.system_type_id) = 'timestamp' THEN 0 ELSE 1 END,
+		CASE WHEN t.is_assembly_type = 1 OR TYPE_NAME(c.system_type_id) IN ('binary', 'varbinary', 'image') THEN 1 ELSE 0 END
+		FROM sys.columns c LEFT JOIN sys.types t ON t.user_type_id = c.user_type_id
+		WHERE c.object_id = OBJECT_ID(@p1) ORDER BY c.column_id`, obj)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +279,7 @@ func writableColumns(ctx context.Context, db *sql.DB, obj string) ([]tableCol, e
 	var out []tableCol
 	for rows.Next() {
 		var c tableCol
-		if err := rows.Scan(&c.Name, &c.Writable); err != nil {
+		if err := rows.Scan(&c.Name, &c.Writable, &c.Binary); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -313,7 +318,7 @@ func matchColumns(header []string, tcols []tableCol) ([]csvColumn, []int, error)
 		if !c.Writable {
 			continue
 		}
-		cols = append(cols, csvColumn{Name: c.Name})
+		cols = append(cols, csvColumn{Name: c.Name, binary: c.Binary})
 		keep = append(keep, i)
 	}
 	if len(cols) == 0 {
@@ -557,9 +562,12 @@ func (j *importJob) load(ctx context.Context, s *session, f *os.File) (err error
 	defer tx.Rollback() // no-op once committed
 	if j.appendRows {
 		defs := make([]string, len(cols))
-		for i := range cols {
+		for i, c := range cols {
 			names[i] = fmt.Sprintf("c%d", i)
 			defs[i] = names[i] + " nvarchar(max) NULL"
+			if c.binary {
+				defs[i] = names[i] + " varbinary(max) NULL"
+			}
 		}
 		dest = "#stage"
 		if _, err = tx.ExecContext(ctx, "CREATE TABLE #stage ("+strings.Join(defs, ", ")+")"); err != nil {
@@ -586,6 +594,11 @@ func (j *importJob) load(ctx context.Context, s *session, f *os.File) (err error
 		}
 		for i, c := range cols {
 			vals[i] = c.sqlValue(row[i])
+			if c.binary && row[i] != "" {
+				if vals[i], err = base64.StdEncoding.DecodeString(row[i]); err != nil {
+					return fmt.Errorf("column %q, row %d: not base64, which is how binary values are exported", c.Name, j.rows.Load()+1)
+				}
+			}
 		}
 		if _, err := bulk.ExecContext(ctx, vals...); err != nil {
 			return err

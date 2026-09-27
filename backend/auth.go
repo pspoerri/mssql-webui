@@ -85,6 +85,7 @@ type session struct {
 	mu       sync.Mutex
 	dbs      map[string]*sql.DB    // "server/database" -> pool, filled by sql.go
 	jobs     map[string]*importJob // by id, guarded by mu; see import.go
+	closed   bool                  // set by dropSession under mu: no new pools after logout
 }
 
 // ended says why the session is over: "expired" past sessionTTL, "idle" past
@@ -171,6 +172,7 @@ func dropSession(id, why string) {
 	if s != nil {
 		audit(auditEvent{Event: "logout", User: s.Email, Name: s.Name, Reason: why}, nil)
 		s.mu.Lock()
+		s.closed = true // a request still running on this session gets no new pool
 		for _, j := range s.jobs {
 			j.cancel()
 		}
@@ -227,10 +229,13 @@ func setCookie(w http.ResponseWriter, name, value, path string, maxAge int) {
 	})
 }
 
+// handleLogin sends the browser to Entra. The oauth_state cookie holds the
+// state and the PKCE verifier ("state.verifier"), so a code stolen from
+// another login cannot be exchanged here (RFC 9700 4.5).
 func handleLogin(w http.ResponseWriter, r *http.Request) {
-	state := randomID()
-	setCookie(w, "oauth_state", state, "/auth", 300)
-	http.Redirect(w, r, oauthCfg.AuthCodeURL(state, oauth2.SetAuthURLParam("prompt", "select_account")), http.StatusFound)
+	state, verifier := randomID(), oauth2.GenerateVerifier()
+	setCookie(w, "oauth_state", state+"."+verifier, "/auth", 300)
+	http.Redirect(w, r, oauthCfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oauth2.SetAuthURLParam("prompt", "select_account")), http.StatusFound)
 }
 
 // auditLogin records a login attempt; cl names the user once the id_token got that far.
@@ -241,7 +246,11 @@ func auditLogin(cl claims, err error) {
 func handleCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	c, err := r.Cookie("oauth_state")
-	if err != nil || c.Value == "" || c.Value != q.Get("state") {
+	var state, verifier string
+	if err == nil {
+		state, verifier, _ = strings.Cut(c.Value, ".")
+	}
+	if state == "" || verifier == "" || state != q.Get("state") {
 		auditLogin(claims{}, errors.New("invalid state"))
 		http.Error(w, "invalid state", http.StatusBadRequest)
 		return
@@ -251,7 +260,7 @@ func handleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, e+": "+q.Get("error_description"), http.StatusBadRequest)
 		return
 	}
-	tok, err := oauthCfg.Exchange(r.Context(), q.Get("code"))
+	tok, err := oauthCfg.Exchange(r.Context(), q.Get("code"), oauth2.VerifierOption(verifier))
 	if err != nil {
 		log.Printf("token exchange: %v", err)
 		auditLogin(claims{}, fmt.Errorf("token exchange: %w", err))
@@ -314,12 +323,15 @@ func withSession(h func(http.ResponseWriter, *http.Request, *session)) http.Hand
 		now := time.Now()
 		sessions.Lock()
 		s := sessions.m[c.Value]
-		if s != nil && !s.expired(now) {
-			s.lastSeen = now
+		why := ""
+		if s != nil {
+			if why = s.ended(now); why == "" {
+				s.lastSeen = now // lastSeen is only read and written under sessions.Mutex
+			}
 		}
 		sessions.Unlock()
-		if s != nil && s.expired(now) {
-			dropSession(c.Value, s.ended(now))
+		if why != "" {
+			dropSession(c.Value, why)
 			s = nil
 		}
 		if s == nil {

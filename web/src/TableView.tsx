@@ -172,9 +172,12 @@ export function TableView({ srv, db, table, onDirty }: Props) {
   const isNum = (name: string) => /int|decimal|numeric|money|float|real/i.test(colMeta(name)?.type ?? '')
   const isReadonly = (name: string) => !editable || (colMeta(name)?.readonly ?? true)
   const canInsert = (name: string) => isTable && !(colMeta(name)?.readonly ?? true)
-  // ponytail: clearing a nullable cell means NULL, a non-nullable one means "".
-  // Add an explicit NULL toggle if someone needs an empty string in a nullable column.
-  const normalize = (name: string, v: string) => (v === '' && colMeta(name)?.nullable ? null : v)
+  // A cleared cell is NULL, except in a NOT NULL text column, where it is "".
+  // In a number, date or bit column "" would be converted to 0 / 1900-01-01 /
+  // false, so it goes as NULL and SQL Server refuses it for a NOT NULL column.
+  // ponytail: add an explicit NULL toggle if someone needs "" in a nullable column.
+  const normalize = (name: string, v: string) =>
+    v === '' && (colMeta(name)?.nullable || !/char|text|xml/i.test(colMeta(name)?.type ?? '')) ? null : v
 
   // Pinned columns (the key columns until toggled) are shown first, in pin order, and stay put
   // while scrolling sideways, as does the delete checkbox.

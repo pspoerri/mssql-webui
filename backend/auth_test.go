@@ -7,9 +7,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/oauth2"
 )
 
 func fakeIDToken(payload map[string]any) string {
@@ -205,4 +209,42 @@ func TestSweepSessionsClosesPools(t *testing.T) {
 	if !closedDB(idleDB) || !closedDB(oldDB) || closedDB(liveDB) {
 		t.Fatalf("pools closed: idle=%v old=%v live=%v", closedDB(idleDB), closedDB(oldDB), closedDB(liveDB))
 	}
+}
+
+// The login redirect carries a PKCE challenge whose verifier stays in the state cookie.
+func TestLoginUsesPKCE(t *testing.T) {
+	oauthCfg = &oauth2.Config{ClientID: "cid", Endpoint: oauth2.Endpoint{AuthURL: "https://login.example/authorize"}}
+	defer func() { oauthCfg = nil }()
+	rec := httptest.NewRecorder()
+	handleLogin(rec, httptest.NewRequest("GET", "/auth/login", nil))
+	loc, _ := url.Parse(rec.Header().Get("Location"))
+	var cookie string
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "oauth_state" {
+			cookie = c.Value
+		}
+	}
+	state, verifier, _ := strings.Cut(cookie, ".")
+	q := loc.Query()
+	if q.Get("state") != state || verifier == "" || q.Get("code_challenge_method") != "S256" || q.Get("code_challenge") != oauth2.S256ChallengeFromVerifier(verifier) {
+		t.Fatalf("cookie %q, redirect %s", cookie, loc)
+	}
+}
+
+// Parallel requests on one session: lastSeen is only touched under the lock (run with -race).
+func TestConcurrentRequestsOnOneSession(t *testing.T) {
+	sessions.Lock()
+	sessions.m["busy"] = &session{expires: time.Now().Add(time.Hour), lastSeen: time.Now(), dbs: map[string]*sql.DB{}}
+	sessions.Unlock()
+	defer dropSession("busy", "test")
+	h := withSession(func(w http.ResponseWriter, r *http.Request, s *session) {})
+	var wg sync.WaitGroup
+	for range 20 {
+		wg.Go(func() {
+			r := httptest.NewRequest("GET", "/api/me", nil)
+			r.AddCookie(&http.Cookie{Name: "sid", Value: "busy"})
+			h(httptest.NewRecorder(), r)
+		})
+	}
+	wg.Wait()
 }

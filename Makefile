@@ -42,8 +42,8 @@ e2e: build ## Browser tests of a data steward's day against make run-sqlserver (
 image: ## Build the container image mssql-webui (CONTAINER=docker|podman)
 	$(CONTAINER) build --build-arg VERSION=$(VERSION) -t $(BIN) .
 
-run: ## Run the image on :8080 with the variables from .env
-	$(CONTAINER) run --rm -p 8080:8080 --env-file .env $(BIN)
+run: ## Run the image on localhost:8080 with the variables from .env (dev mode too: see README)
+	$(CONTAINER) run --rm -p 127.0.0.1:8080:8080 -e LISTEN_ADDR=:8080 --env-file .env $(BIN)
 
 run-sqlserver: ## Run a local SQL Server 2022 in the foreground on :1433 (sa / SA_PASSWORD, default Dev_Passw0rd); Ctrl-C stops it
 	@echo "SQL_SERVERS='sqlserver://sa:$(SA_PASSWORD)@localhost:1433?trustservercertificate=true'"

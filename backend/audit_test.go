@@ -177,9 +177,15 @@ func TestAuditLogsEveryStatement(t *testing.T) {
 		{Event: "begin", OK: true},
 		{Event: "rollback", OK: true},
 		{Event: "exec", SQL: `INSERTBULK {"TableName":"t"}`, OK: true, Rows: &two},
-		{Event: "exec", SQL: long[:maxAuditSQL-1], OK: true, Rows: &two, Truncated: true}, // cut before the split rune
+		// Split over lines, each cut before a split rune: 7 + 16384 bytes -> 8191, 8192, 8
+		{Event: "exec", SQL: long[:maxAuditSQL-1], OK: true, Rows: &two, Part: 1, Parts: 3},
+		{Event: "exec", SQL: long[maxAuditSQL-1 : 2*maxAuditSQL-1], OK: true, Rows: &two, Part: 2, Parts: 3},
+		{Event: "exec", SQL: long[2*maxAuditSQL-1:], OK: true, Rows: &two, Part: 3, Parts: 3},
 	}
 	got := events()
+	if n := len(got); n >= 3 && (got[n-1].ID == "" || got[n-1].ID != got[n-3].ID || got[n-2].SQL+got[n-1].SQL != long[maxAuditSQL-1:]) {
+		t.Errorf("parts do not share an id or do not reassemble: %q %q %q", got[n-3].ID, got[n-2].ID, got[n-1].ID)
+	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d events, want %d:\n%+v", len(got), len(want), got)
 	}
@@ -189,7 +195,7 @@ func TestAuditLogsEveryStatement(t *testing.T) {
 			t.Errorf("event %d: identity/time missing: %+v", i, g)
 		}
 		rowsMatch := (g.Rows == nil) == (w.Rows == nil) && (g.Rows == nil || *g.Rows == *w.Rows)
-		if g.Event != w.Event || g.SQL != w.SQL || g.OK != w.OK || g.Error != w.Error || g.Truncated != w.Truncated || !rowsMatch {
+		if g.Event != w.Event || g.SQL != w.SQL || g.OK != w.OK || g.Error != w.Error || g.Part != w.Part || g.Parts != w.Parts || !rowsMatch {
 			t.Errorf("event %d:\n got %+v\nwant %+v", i, g, w)
 		}
 	}
@@ -245,6 +251,10 @@ func TestAuditLoginAndLogout(t *testing.T) {
 	events := captureAudit(t)
 	idToken := fakeIDToken(map[string]any{"aud": "cid", "tid": "t1", "name": "Ann", "preferred_username": "ann@example.com"})
 	entra := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ParseForm(); r.Form.Get("code_verifier") != "verifier" { // PKCE: the verifier from the cookie must reach Entra
+			http.Error(w, `{"error":"invalid_grant"}`, http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"access_token":"at","token_type":"Bearer","refresh_token":"rt","expires_in":3600,"id_token":%q}`, idToken)
 	}))
@@ -255,7 +265,7 @@ func TestAuditLoginAndLogout(t *testing.T) {
 
 	callback := func(sid string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest("GET", "/auth/callback?code=c&state=st", nil)
-		r.AddCookie(&http.Cookie{Name: "oauth_state", Value: "st"})
+		r.AddCookie(&http.Cookie{Name: "oauth_state", Value: "st.verifier"})
 		if sid != "" {
 			r.AddCookie(&http.Cookie{Name: "sid", Value: sid})
 		}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -387,5 +388,50 @@ func TestTypeLabel(t *testing.T) {
 		if got := typeLabel(c.name, c.base, c.maxLen, c.prec, c.scale); got != c.want {
 			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+// A failed first connect keeps no pool (else any name in a URL leaks one per
+// session); a dropped session opens no new ones and answers 401.
+func TestSessionDBKeepsNoPoolOnFailureOrAfterLogout(t *testing.T) {
+	m, names, err := parseServers("sqlserver://sa:x@127.0.0.1:1?dial+timeout=2") // nothing listens on port 1
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, serverNames = m, names
+	defer func() { servers, serverNames = nil, nil }()
+	s := &session{dbs: map[string]*sql.DB{}}
+	if _, err := s.db(context.Background(), "127.0.0.1", "nope"); err == nil {
+		t.Fatal("connect to a closed port succeeded")
+	}
+	if len(s.dbs) != 0 {
+		t.Fatalf("failed connect left %d pools", len(s.dbs))
+	}
+	s.closed = true
+	_, err = s.db(context.Background(), "127.0.0.1", "other")
+	rec := httptest.NewRecorder()
+	fail(rec, err)
+	if !errors.Is(err, errSessionEnded) || rec.Code != http.StatusUnauthorized || len(s.dbs) != 0 {
+		t.Fatalf("closed session: err=%v status=%d pools=%d", err, rec.Code, len(s.dbs))
+	}
+}
+
+// Binary columns come from the grid as base64; keys, set values and inserts are decoded to bytes.
+func TestDecodeBinary(t *testing.T) {
+	b := batch{
+		Inserts: []map[string]any{{"k": "AQI=", "n": "x"}},
+		Updates: []update{{Key: map[string]any{"k": "AQI="}, Set: map[string]any{"n": "y", "blob": "/w=="}}},
+		Deletes: []map[string]any{{"k": "AQI="}},
+	}
+	if err := decodeBinary(b, []string{"k", "n", "blob"}, []string{"VARBINARY", "NVARCHAR", "IMAGE"}); err != nil {
+		t.Fatal(err)
+	}
+	k := []byte{1, 2}
+	if !reflect.DeepEqual(b.Inserts[0]["k"], k) || b.Inserts[0]["n"] != "x" || !reflect.DeepEqual(b.Updates[0].Key["k"], k) ||
+		!reflect.DeepEqual(b.Updates[0].Set["blob"], []byte{0xff}) || b.Updates[0].Set["n"] != "y" || !reflect.DeepEqual(b.Deletes[0]["k"], k) {
+		t.Fatalf("%#v", b)
+	}
+	if err := decodeBinary(batch{Deletes: []map[string]any{{"k": "not base64!"}}}, []string{"k"}, []string{"BINARY"}); err == nil {
+		t.Fatal("bad base64 accepted")
 	}
 }

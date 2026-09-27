@@ -91,7 +91,7 @@ and says whether the action succeeded:
 | `query`, `exec` | one statement; `rows` is rows read or rows affected. A query is logged when its result set is closed, so an error that arrives among the rows counts as a failure |
 | `begin`, `commit`, `rollback` | the transaction around grid edits and CSV imports; a statement that succeeded and was then rolled back shows up as such |
 
-Statement text is logged (cut at 8 KB with `"truncated":true`); parameter
+Statement text is logged in full; one over 8 KB is spread over consecutive lines with the same `"id"` and `"part"`/`"parts"` (so no log driver splits a line); parameter
 values and result contents are not. The liveness ping before a request is not
 a statement and is not logged. In dev mode `user` is `DEV_USER`. Statements
 are caught at the database driver, so no request path can reach SQL Server
@@ -158,7 +158,8 @@ make dev               # backend on :8080, Vite on :5173 (proxies /api and /auth
 Set `DEV_USER` to skip Entra entirely. Every request runs as that name and
 servers are opened with the SQL login in their `SQL_SERVERS` URL. Anyone who
 can reach the port is that user, so never set it in production. It listens on
-localhost only by default, and it refuses to start if Entra variables
+localhost only by default, answers only requests addressed to `localhost` (a
+page elsewhere cannot reach it through DNS rebinding), and it refuses to start if Entra variables
 (`TENANT_ID`/`CLIENT_SECRET`) are also set. Logout is a no-op in dev mode.
 
 ```bash
@@ -209,8 +210,15 @@ To build locally instead:
 ```bash
 make image                    # docker build -t mssql-webui .
 make image CONTAINER=podman   # or set CONTAINER=podman in .env
-make run                      # runs the image on :8080 with --env-file .env
+make run                      # runs the image on localhost:8080 with --env-file .env
 ```
+
+`make run` also works with the dev-mode `.env` (`DEV_USER`): it listens on all
+interfaces inside the container but publishes only on the host's loopback, and
+dev mode still answers only requests addressed to `localhost`. Inside the
+container `localhost` is the container itself, so point `SQL_SERVERS` at the
+host instead: `host.docker.internal` (Docker) or `host.containers.internal`
+(Podman), e.g. `sqlserver://sa:Dev_Passw0rd@host.containers.internal:1433?trustservercertificate=true`.
 
 Without make:
 

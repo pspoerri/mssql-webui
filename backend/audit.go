@@ -24,23 +24,27 @@ import (
 var auditOut = log.New(os.Stdout, "", 0)
 
 // maxAuditSQL caps the statement text in one line; container log drivers
-// split lines beyond 16 KB. A bulk INSERT is all placeholders past this point.
+// split lines beyond 16 KB. A longer statement is written in full over
+// several lines ("part" 1..n of "parts", sharing an "id"), never cut: a cut
+// line could hide a DROP behind padding.
 const maxAuditSQL = 8 << 10
 
 type auditEvent struct {
-	Time      string  `json:"time"`
-	Event     string  `json:"event"` // login, logout, connect, query, exec, begin, commit, rollback
-	User      string  `json:"user,omitempty"`
-	Name      string  `json:"name,omitempty"`
-	Server    string  `json:"server,omitempty"`
-	DB        string  `json:"db,omitempty"`
-	Reason    string  `json:"reason,omitempty"` // logout: user, idle, expired, relogin
-	OK        bool    `json:"ok"`
-	Error     string  `json:"error,omitempty"`
-	Ms        float64 `json:"ms,omitempty"`
-	Rows      *int64  `json:"rows,omitempty"` // exec: rows affected; query: rows read
-	Truncated bool    `json:"truncated,omitempty"`
-	SQL       string  `json:"sql,omitempty"`
+	Time   string  `json:"time"`
+	Event  string  `json:"event"` // login, logout, connect, query, exec, begin, commit, rollback
+	User   string  `json:"user,omitempty"`
+	Name   string  `json:"name,omitempty"`
+	Server string  `json:"server,omitempty"`
+	DB     string  `json:"db,omitempty"`
+	Reason string  `json:"reason,omitempty"` // logout: user, idle, expired, relogin
+	OK     bool    `json:"ok"`
+	Error  string  `json:"error,omitempty"`
+	Ms     float64 `json:"ms,omitempty"`
+	Rows   *int64  `json:"rows,omitempty"`  // exec: rows affected; query: rows read
+	ID     string  `json:"id,omitempty"`    // a statement split over several lines
+	Part   int     `json:"part,omitempty"`  // 1..Parts
+	Parts  int     `json:"parts,omitempty"` // number of lines of the statement
+	SQL    string  `json:"sql,omitempty"`
 }
 
 // audit writes e with the current time and err as its outcome.
@@ -50,15 +54,25 @@ func audit(e auditEvent, err error) {
 	if err != nil {
 		e.Error = err.Error()
 	}
-	if len(e.SQL) > maxAuditSQL {
-		n := maxAuditSQL
-		for n > 0 && !utf8.RuneStart(e.SQL[n]) {
+	if len(e.SQL) <= maxAuditSQL {
+		b, _ := json.Marshal(e)
+		auditOut.Print(string(b))
+		return
+	}
+	var parts []string
+	for sql := e.SQL; sql != ""; {
+		n := min(len(sql), maxAuditSQL)
+		for n < len(sql) && !utf8.RuneStart(sql[n]) {
 			n--
 		}
-		e.SQL, e.Truncated = e.SQL[:n], true
+		parts, sql = append(parts, sql[:n]), sql[n:]
 	}
-	b, _ := json.Marshal(e)
-	auditOut.Print(string(b))
+	e.ID, e.Parts = randomID()[:12], len(parts)
+	for i, p := range parts {
+		e.Part, e.SQL = i+1, p
+		b, _ := json.Marshal(e)
+		auditOut.Print(string(b))
+	}
 }
 
 // done writes one SQL event on top of the base fields (user, server, db).

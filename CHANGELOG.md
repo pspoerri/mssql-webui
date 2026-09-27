@@ -38,6 +38,24 @@
 - End-to-end tests: `make e2e` drives the app in headless Chromium through a data steward's
   workflow on an existing database (browse, search, edit, definitions, CSV export/import, console,
   resuming database) against `make run-sqlserver`.
+- Cross-site requests that change state are refused (Go's CrossOriginProtection): before, a
+  page on a same-site sibling host could POST SQL with the user's cookie, and in dev mode any web
+  page could. Dev mode also answers only requests addressed to localhost, which stops DNS
+  rebinding.
+- Sign-in uses PKCE, so an authorization code stolen from another login cannot be exchanged.
+- The audit log keeps every statement whole: one over 8 KB is written across consecutive lines
+  sharing an `id` (`part`/`parts`) instead of being cut, which could hide a statement's end.
+- Clearing a number, date or bit cell sends NULL: a NOT NULL column refuses it instead of
+  silently storing 0, 1900-01-01 or false.
+- Tables with a binary primary key can be edited (the base64 shown in the grid is decoded
+  before it is bound), and a downloaded CSV with binary or CLR columns (varbinary, image,
+  geography, hierarchyid, ...) imports back.
+- A database name that fails to open no longer leaves a connection pool behind for the rest of
+  the session, and a request still running during logout cannot open new pools; a data race on
+  the session's last-seen time is gone.
+- `make run` works with the dev-mode `.env`: it publishes on the host's loopback and listens on
+  all interfaces inside the container (see README for reaching SQL Server from the container).
+- CI runs `make e2e` against a SQL Server service container.
 - Errors from a proxy in front of the app (e.g. 413 for an upload over its size limit, 504
   for a timeout) are shown with their status instead of an empty message.
 

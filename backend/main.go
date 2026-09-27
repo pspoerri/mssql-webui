@@ -4,6 +4,7 @@ import (
 	"embed"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -48,7 +49,31 @@ func main() {
 	}
 	addr := env("LISTEN_ADDR", defaultAddr)
 	log.Printf("listening on %s; audit log on stdout", addr)
-	log.Fatal((&http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}).ListenAndServe())
+	log.Fatal((&http.Server{Addr: addr, Handler: protect(mux, devSession != nil), ReadHeaderTimeout: 10 * time.Second}).ListenAndServe())
+}
+
+// protect refuses cross-site requests that change state: a page on another
+// origin could otherwise POST SQL to /api/.../query with the user's cookie
+// (SameSite=Lax still admits same-site sibling hosts) or, in dev mode, with
+// no cookie at all. Dev mode also demands a loopback Host: a DNS-rebinding
+// page looks same-origin to the browser, even for GETs, but names its own host.
+func protect(h http.Handler, dev bool) http.Handler {
+	h = http.NewCrossOriginProtection().Handler(h)
+	if !dev {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if hh, _, err := net.SplitHostPort(host); err == nil {
+			host = hh
+		}
+		host = strings.Trim(host, "[]")
+		if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			http.Error(w, "dev mode answers only on localhost", http.StatusForbidden)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 // spaHandler serves the built frontend and falls back to index.html for

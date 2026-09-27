@@ -101,6 +101,16 @@ test('a value SQL Server rejects shows the error and writes nothing', async () =
   await p.close()
 })
 
+test('clearing a required number is refused, not saved as 0', async () => {
+  const p = await app.page()
+  await p.goto(table('order') + '?q=order_no%3D2')
+  await cell(p, 'net').first().fill('')
+  await p.getByRole('button', { name: /^Save 1 row$/ }).click()
+  await p.locator('.error').filter({ hasText: /NULL/ }).waitFor()
+  assert.deepEqual(await app.rows('SELECT net FROM dbo.[order] WHERE order_no = 2'), [['250.50']])
+  await p.close()
+})
+
 test('a table without a primary key is append-only', async () => {
   const p = await app.page()
   await p.goto(table('event_log'))
