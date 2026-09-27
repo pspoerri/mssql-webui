@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- CSV import handles files of millions of rows: the upload returns at once and the import
+  runs as a background job, shown in the sidebar with upload percentage, type-check and
+  insert progress, row count and a Cancel button (a canceled or failed import leaves nothing
+  behind). Rows go in by bulk copy instead of batched INSERTs (1M rows: 3 s instead of 129 s
+  locally), and a new table is committed before its rows, so the tree does not hang for other
+  users while an import runs. Before, a long import outlived the proxy's request timeout and
+  was rolled back without a visible error.
+- Codes with a leading zero (zip, phone, account numbers) are imported as text instead of
+  losing the zero as numbers.
+- A paused serverless database no longer holds requests for up to two minutes: the server
+  answers 503 at once and the UI shows "database … is paused and resuming" in the header
+  while it retries.
+- Errors from a proxy in front of the app (e.g. 413 for an upload over its size limit, 504
+  for a timeout) are shown with their status instead of an empty message.
+
 ## v0.5.0 — 2026-09-04
 
 - Audit log on stdout: every login and logout (with why a session ended), every SQL

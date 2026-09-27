@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react'
-import { api, enc, upload, type Selection, type ServerInfo, type TableInfo } from './api'
+import { useEffect, useRef, useState } from 'react'
+import { api, del, enc, upload, type HttpError, type Job, type Selection, type ServerInfo, type TableInfo } from './api'
 import { Icon } from './icons'
 
 type DbInfo = { schemas: string[]; tables: TableInfo[]; writable: boolean }
 type Props = { selected: Selection | null; onSelect: (s: Selection) => void }
+type Upload = { id: number; schema: string; table: string; sent: number }
 
 export function Tree({ selected, onSelect }: Props) {
   const [servers, setServers] = useState<ServerInfo[]>([])
@@ -11,6 +12,8 @@ export function Tree({ selected, onSelect }: Props) {
   const [loading, setLoading] = useState('') // "srv/db" being fetched; serverless databases take a while to resume
   const [err, setErr] = useState('')
   const [system, setSystem] = useState(() => localStorage.getItem('showSystemDbs') === '1')
+  const [uploads, setUploads] = useState<Upload[]>([])
+  const [jobs, setJobs] = useState<Job[]>([]) // CSV imports running on the server, see pollJobs
 
   const loadServers = () =>
     api<ServerInfo[]>(`/api/servers?system=${system ? 1 : 0}`).then(setServers).catch((e) => setErr(e.message))
@@ -68,9 +71,10 @@ export function Tree({ selected, onSelect }: Props) {
     }
   }
 
-  // Import a CSV: pick a file, name the table, POST the file. A new table's
-  // column types are inferred by the server; an existing table gets the rows
-  // appended after a confirmation. window.prompt to match create().
+  // Import a CSV: pick a file, name the table, upload it. The server runs the
+  // import as a job; pollJobs follows it and opens the table when it is done.
+  // An existing table gets the rows appended after a confirmation.
+  // window.prompt to match create().
   const importCSV = (srv: string, db: string) => {
     const input = document.createElement('input')
     input.type = 'file'
@@ -85,21 +89,64 @@ export function Tree({ selected, onSelect }: Props) {
       const schema = dot < 0 ? 'dbo' : target.slice(0, dot)
       const name = dot < 0 ? target : target.slice(dot + 1)
       const base = `/api/s/${enc(srv)}/d/${enc(db)}/t/${enc(schema)}/${enc(name)}`
-      const exists = await api(base).then(() => true, () => false)
-      if (exists && !window.confirm(`${schema}.${name} already exists. Append the file's rows to it?`)) return
-      setLoading(`${srv}/${db}`)
+      let exists: boolean
+      setLoading(`${srv}/${db}`) // may wait for a paused database
       try {
-        await upload(`${base}/csv${exists ? '?append=1' : ''}`, file)
-        setErr('')
-        await load(srv, db)
-        onSelect({ srv, db, table: { schema, name, kind: 'table' } })
+        exists = await api(base).then(() => true, (e: HttpError) => { if (e.status === 404) return false; throw e })
       } catch (e) {
         setErr((e as Error).message)
+        return
       } finally {
         setLoading('')
       }
+      if (exists && !window.confirm(`${schema}.${name} already exists. Append the file's rows to it?`)) return
+      const up: Upload = { id: Date.now(), schema, table: name, sent: 0 }
+      setUploads((u) => [...u, up])
+      try {
+        const job = await upload<Job>(`${base}/csv${exists ? '?append=1' : ''}`, file,
+          (sent, total) => setUploads((u) => u.map((x) => (x.id === up.id ? { ...x, sent: sent / total } : x))))
+        mine.current.add(job.id)
+        seen.current[job.id] = job.state
+        setJobs((j) => [...j, job])
+        setErr('')
+      } catch (e) {
+        setErr((e as Error).message)
+      } finally {
+        setUploads((u) => u.filter((x) => x.id !== up.id))
+      }
     }
     input.click()
+  }
+
+  // Jobs: fetched once (imports survive a reload) and every second while one
+  // runs. A job that finishes refreshes its database; one started from this
+  // page also opens the table.
+  const mine = useRef(new Set<string>())
+  const seen = useRef<Record<string, Job['state']>>({})
+  const pollJobs = async () => {
+    const next = await api<Job[]>('/api/jobs').catch(() => null)
+    if (!next) return
+    for (const j of next) {
+      if (seen.current[j.id] === 'running' && j.state === 'done') {
+        if (open[`${j.srv}/${j.db}`]) load(j.srv, j.db)
+        if (mine.current.has(j.id)) onSelect({ srv: j.srv, db: j.db, table: { schema: j.schema, name: j.table, kind: 'table' } })
+      }
+      seen.current[j.id] = j.state
+    }
+    setJobs(next)
+  }
+  const poll = useRef(pollJobs)
+  useEffect(() => { poll.current = pollJobs })
+  const running = jobs.some((j) => j.state === 'running')
+  useEffect(() => { poll.current() }, [])
+  useEffect(() => {
+    if (!running) return
+    const id = setInterval(() => poll.current(), 1000)
+    return () => clearInterval(id)
+  }, [running])
+  const dropJob = (j: Job) => {
+    if (j.state !== 'running') setJobs((js) => js.filter((x) => x.id !== j.id))
+    del(`/api/jobs/${enc(j.id)}`).then(() => poll.current(), (e) => setErr(e.message))
   }
 
   const isSel = (srv: string, db: string, t?: TableInfo, isConsole?: boolean) =>
@@ -109,6 +156,27 @@ export function Tree({ selected, onSelect }: Props) {
   return (
     <nav>
       {err && <div className="error">{err}</div>}
+      {(uploads.length > 0 || jobs.length > 0) && (
+        <ul className="jobs" aria-label="Imports">
+          {uploads.map((u) => (
+            <li key={u.id}>
+              <span className="label">Import {u.schema}.{u.table}</span>
+              <progress value={u.sent} />
+              <span className="note">Uploading… {Math.round(u.sent * 100)}%</span>
+            </li>
+          ))}
+          {jobs.map((j) => (
+            <li key={j.id} className={j.state}>
+              <span className="label" title={`${j.srv} / ${j.db}`}>{j.append ? 'Append to' : 'Import'} {j.schema}.{j.table}</span>
+              <button type="button" className="quiet" onClick={() => dropJob(j)} aria-label={j.state === 'running' ? `Cancel import of ${j.table}` : 'Dismiss'}>
+                {j.state === 'running' ? 'Cancel' : '×'}
+              </button>
+              {j.state === 'running' && <progress value={j.phase === 'checking types' || j.phase === 'inserting' ? j.bytes / j.size : undefined} />}
+              <span className={j.state === 'failed' ? 'msg' : 'note'}>{jobText(j)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       <ul>
         {servers.map((s) => (
           <li key={s.name}>
@@ -182,4 +250,22 @@ export function Tree({ selected, onSelect }: Props) {
       </label>
     </nav>
   )
+}
+
+const n = (x: number) => x.toLocaleString()
+
+function jobText(j: Job): string {
+  const pct = `${Math.round((100 * j.bytes) / Math.max(1, j.size))}%`
+  switch (j.state) {
+    case 'done': return `${j.append ? 'Appended' : 'Imported'} ${n(j.rows)} rows`
+    case 'failed': return j.error
+    case 'canceled': return 'Canceled; nothing was imported'
+  }
+  switch (j.phase) {
+    case 'checking types': return `Checking column types… ${pct}`
+    case 'inserting': return `Inserting… ${n(j.rows)} rows (${pct})`
+    case 'waiting for the database to resume': return 'Waiting for the database to resume…'
+    case '': case 'connecting': return 'Connecting…'
+  }
+  return `${j.phase[0].toUpperCase()}${j.phase.slice(1)}… ${n(j.rows)} rows`
 }

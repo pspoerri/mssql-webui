@@ -83,7 +83,8 @@ type session struct {
 	lastSeen time.Time // updated by withSession; guarded by sessions.Mutex
 	ts       oauth2.TokenSource
 	mu       sync.Mutex
-	dbs      map[string]*sql.DB // "server/database" -> pool, filled by sql.go
+	dbs      map[string]*sql.DB    // "server/database" -> pool, filled by sql.go
+	jobs     map[string]*importJob // by id, guarded by mu; see import.go
 }
 
 // ended says why the session is over: "expired" past sessionTTL, "idle" past
@@ -170,6 +171,9 @@ func dropSession(id, why string) {
 	if s != nil {
 		audit(auditEvent{Event: "logout", User: s.Email, Name: s.Name, Reason: why}, nil)
 		s.mu.Lock()
+		for _, j := range s.jobs {
+			j.cancel()
+		}
 		for _, db := range s.dbs {
 			db.Close()
 		}

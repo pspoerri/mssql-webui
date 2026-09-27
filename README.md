@@ -39,8 +39,9 @@ separates names because ',' separates servers). Each one is probed with a
 short connect, so databases the user cannot open are greyed out here too.
 Databases where `HAS_DBACCESS()` returns 0 are greyed out, and so is a
 server whose listing failed entirely; system databases are hidden unless
-toggled on at the bottom of the tree. A paused serverless database is
-retried for up to two minutes while it resumes.
+toggled on at the bottom of the tree. A paused serverless database answers
+503 while it resumes; the UI says so in the header and retries every 5 seconds
+for up to three minutes.
 
 If login is refused with a group error, the message says why: *no groups
 claim* means the app registration lacks the claim (step 4 above); *group
@@ -116,14 +117,16 @@ editor above the table; Esc reverts that one cell. **Download CSV** streams the 
 database in the tree loads a CSV file into a table. For a new table, the
 header row names the columns and each column gets the narrowest type all of
 its values fit (bit, int, bigint, float, date, datetime2, datetimeoffset,
-otherwise nvarchar), every column nullable. If the table already exists, the
+otherwise nvarchar; codes with a leading zero stay text), every column nullable. If the table already exists, the
 rows are appended after a confirmation: the header columns must exist in the
 table (matched case-insensitively; identity, computed and rowversion columns
 are skipped so a downloaded CSV imports back), and values are converted by
 SQL Server like grid edits. Empty fields become NULL, a UTF-8 BOM is
 skipped, and semicolon or tab delimiters (Excel) are detected from the
-header line. Everything runs in one transaction, so a failed import leaves
-nothing behind.
+header line. The import runs on the server as a background job with its
+progress in the sidebar (upload, type check, rows inserted, Cancel), so a file of
+millions of rows is not cut off by a proxy's request timeout. Rows go in by bulk
+copy, in one transaction; a failed or canceled import leaves nothing behind.
 
 Tables with a primary key are editable: change cells, tick rows to delete, or
 add rows. Nothing is written until **Save** (or Enter in a cell, Ctrl+Enter in

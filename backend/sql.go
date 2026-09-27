@@ -200,8 +200,8 @@ func (s *session) db(ctx context.Context, srv, dbName string) (*sql.DB, error) {
 	s.mu.Lock()
 	if d, ok := s.dbs[key]; ok {
 		s.mu.Unlock()
-		if err := wake(ctx, d); err != nil {
-			return nil, wrapAccess(err, dbName)
+		if err := d.PingContext(ctx); err != nil {
+			return nil, wrapConnect(err, dbName)
 		}
 		return d, nil
 	}
@@ -227,8 +227,8 @@ func (s *session) db(ctx context.Context, srv, dbName string) (*sql.DB, error) {
 	d.SetConnMaxIdleTime(5 * time.Minute)
 	s.dbs[key] = d
 	s.mu.Unlock()
-	if err := wake(ctx, d); err != nil {
-		return nil, wrapAccess(err, dbName)
+	if err := d.PingContext(ctx); err != nil {
+		return nil, wrapConnect(err, dbName)
 	}
 	return d, nil
 }
@@ -237,24 +237,38 @@ func (s *session) db(ctx context.Context, srv, dbName string) (*sql.DB, error) {
 // returns while it resumes; the login itself triggers the resume.
 var resuming = map[int32]bool{40613: true, 40197: true, 40501: true, 49918: true, 49919: true, 49920: true}
 
-var wakeRetry = 5 * time.Second
+// resumingError is a connect refused because the database is resuming. It
+// is answered at once with 503 and the client retries, so the UI can say
+// what it is waiting for and no request sits a minute behind a proxy timeout.
+type resumingError struct {
+	db  string
+	err error
+}
 
-// wake pings d and retries while the server says the database is resuming.
-// ponytail: one ping per request; cache a last-seen-alive time per handle if
-// the extra round trip shows up.
-func wake(ctx context.Context, d *sql.DB) error {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	for {
-		err := d.PingContext(ctx)
-		var me mssql.Error
-		if err == nil || !errors.As(err, &me) || !resuming[me.Number] {
-			return err
+func (e *resumingError) Error() string {
+	return fmt.Sprintf("database %q is paused and resuming; this can take a minute", e.db)
+}
+func (e *resumingError) Unwrap() error { return e.err }
+
+// waitRetry is how long waitDB sleeps between connect attempts.
+var waitRetry = 5 * time.Second
+
+// waitDB calls open until the database has resumed, for background work
+// that has no client to retry for it; onWait runs once when it starts waiting.
+func waitDB(ctx context.Context, open func() (*sql.DB, error), onWait func()) (*sql.DB, error) {
+	for waited := false; ; waited = true {
+		d, err := open()
+		var re *resumingError
+		if !errors.As(err, &re) {
+			return d, err
+		}
+		if !waited {
+			onWait()
 		}
 		select {
 		case <-ctx.Done():
-			return err
-		case <-time.After(wakeRetry):
+			return nil, err
+		case <-time.After(waitRetry):
 		}
 	}
 }
@@ -265,6 +279,7 @@ func wake(ctx context.Context, d *sql.DB) error {
 func fail(w http.ResponseWriter, err error) {
 	var re *oauth2.RetrieveError
 	var ae *accessError
+	var rs *resumingError
 	var me mssql.Error
 	switch {
 	case errors.Is(err, errNotFound):
@@ -273,6 +288,9 @@ func fail(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "session expired"})
 	case errors.As(err, &ae):
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": ae.Error()})
+	case errors.As(err, &rs): // before mssql.Error, which it wraps
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": rs.Error(), "resuming": true})
 	case errors.As(err, &me):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": sqlMessages(me)})
 	default:
@@ -306,6 +324,8 @@ func registerAPI(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/s/{srv}/d/{db}/t/{schema}/{table}/csv", withSession(handleImportCSV))
 	mux.HandleFunc("POST /api/s/{srv}/d/{db}/t/{schema}/{table}/rows", withSession(handleBatch))
 	mux.HandleFunc("POST /api/s/{srv}/d/{db}/query", withSession(handleQuery))
+	mux.HandleFunc("GET /api/jobs", withSession(handleJobs))
+	mux.HandleFunc("DELETE /api/jobs/{id}", withSession(handleCancelJob))
 }
 
 type serverInfo struct {
@@ -338,12 +358,15 @@ func (e *accessError) Error() string {
 }
 func (e *accessError) Unwrap() error { return e.err }
 
-// wrapAccess tags a no-access connect error with the database it was for;
-// any other error is returned unchanged.
-func wrapAccess(err error, db string) error {
+// wrapConnect tags a no-access or resuming connect error with the database
+// it was for; any other error is returned unchanged.
+func wrapConnect(err error, db string) error {
 	var me mssql.Error
-	if errors.As(err, &me) && noAccess[me.Number] {
+	switch {
+	case errors.As(err, &me) && noAccess[me.Number]:
 		return &accessError{db: db, err: err}
+	case errors.As(err, &me) && resuming[me.Number]:
+		return &resumingError{db: db, err: err}
 	}
 	return err
 }

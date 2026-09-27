@@ -56,7 +56,7 @@ sequenceDiagram
     end
     S->>Q: TDS login, federated auth with access_token
     Note over Q: token verified, connection runs as the user
-    Note over Q: paused serverless db: retry every 5 s, up to 2 min
+    Note over S,Q: paused serverless db: 503, the browser retries every 5 s
     S->>Q: SELECT with the user's own SQL permissions
     Q-->>S: rows
     S-->>B: JSON

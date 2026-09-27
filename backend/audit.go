@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"reflect"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -208,6 +209,12 @@ func (s *auditStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (
 		res, err = e.ExecContext(ctx, args)
 	} else {
 		res, err = s.Stmt.Exec(values(args))
+	}
+	// A bulk copy (mssql.CopyIn) takes one Exec per row and a final Exec
+	// without arguments that sends the rest and returns the row count; that
+	// one is logged, a line per row would drown the log.
+	if len(args) > 0 && strings.HasPrefix(s.sql, "INSERTBULK") && err == nil {
+		return res, err
 	}
 	var rows *int64
 	if err == nil && res != nil {

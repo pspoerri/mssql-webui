@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { api, fromPath, toPath, type Selection } from './api'
+import { api, fromPath, onResuming, toPath, type Selection } from './api'
 import { Console } from './Console'
 import { TableView } from './TableView'
 import { Tree } from './Tree'
@@ -23,6 +23,8 @@ export default function App() {
   useEffect(() => {
     api<Me>('/api/me').then(setMe).catch(() => {})
   }, [])
+  const [resuming, setResuming] = useState('') // a paused serverless database is waking up
+  useEffect(() => onResuming(setResuming), [])
 
   // Keepalive: the server ends a session after 30 minutes without a request. Ping while the
   // tab is visible, and when it becomes visible again; a hidden tab still times out.
@@ -81,6 +83,7 @@ export default function App() {
             <span key={i}>{i > 0 && <span className="sep">/ </span>}{i === crumbs.length - 1 ? <b>{c}</b> : c}</span>
           ))}
         </div>
+        {resuming && <span className="resuming" role="status"><Icon name="spinner" className="spinner" />{resuming}…</span>}
         <span className="me">{me?.name}</span>
         <button className="quiet" onClick={logout}>Log out</button>
       </header>
@@ -133,7 +136,8 @@ function Help() {
           date, datetime2, datetimeoffset, otherwise nvarchar). If the table already exists, the rows are appended
           after a confirmation: header columns must match the table's (identity and computed columns are skipped, so
           a downloaded CSV can be imported back). Empty fields become NULL; semicolon and tab delimiters are detected
-          automatically.</li>
+          automatically. The import runs in the background with its progress at the top of the sidebar, where it can be
+          canceled; the table opens when it is done.</li>
       </ul>
       <h3>Searching</h3>
       <ul>

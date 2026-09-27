@@ -100,6 +100,9 @@ nav .server .refresh { width: auto; padding: 2px; margin-left: auto; color: var(
 nav .server .refresh:hover { color: var(--ink); }
 nav .kind { color: var(--faint); font-size: 11px; margin-left: auto; }
 nav .spinner { margin-left: auto; color: var(--faint); animation: spin .8s linear infinite; transform-box: fill-box; transform-origin: center; }
+header .resuming { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 10px; background: var(--pending-bg); color: var(--pending); font-size: 12px; }
+header .resuming + .me { margin-left: 0; }
+header .resuming .spinner { animation: spin .8s linear infinite; transform-box: fill-box; transform-origin: center; }
 @keyframes spin { to { transform: rotate(360deg); } }
 nav .schema { display: block; padding: 6px 6px 1px; color: var(--muted); font-size: 11px; }
 nav .add { color: var(--muted); font-size: 12px; }
@@ -107,6 +110,15 @@ nav .noaccess { color: var(--faint); }
 nav .noaccess svg { color: var(--faint); }
 nav .toggle { margin-top: auto; padding: 10px 6px 0; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 nav .error { margin: 0 0 8px; }
+nav .jobs { margin: 0 0 8px; display: flex; flex-direction: column; gap: 6px; }
+nav .jobs li { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg); font-size: 12px; }
+nav .jobs li > :not(.label, button) { grid-column: 1 / -1; }
+nav .jobs .label { font-weight: 500; }
+nav .jobs button { width: auto; padding: 0 6px; font-size: 12px; }
+nav .jobs progress { width: 100%; height: 6px; accent-color: var(--accent); }
+nav .jobs .done { border-color: var(--accent); }
+nav .jobs .failed { border-color: var(--danger); }
+nav .jobs .msg { color: var(--danger); white-space: pre-wrap; overflow-wrap: anywhere; font: 11px/1.4 var(--mono); }
 
 /* Main */
 main { overflow: auto; }

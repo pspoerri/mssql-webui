@@ -145,6 +145,19 @@ func TestAuditLogsEveryStatement(t *testing.T) {
 	tx.Commit()
 	tx, _ = db.BeginTx(ctx, nil)
 	tx.Rollback()
+	bulk, err := db.PrepareContext(ctx, `INSERTBULK {"TableName":"t"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 3 {
+		if _, err := bulk.ExecContext(ctx, i); err != nil { // one row each: not logged
+			t.Fatal(err)
+		}
+	}
+	if _, err := bulk.ExecContext(ctx); err != nil { // the flush: logged once
+		t.Fatal(err)
+	}
+	bulk.Close()
 	long := "INSERT " + strings.Repeat("é", maxAuditSQL)
 	if _, err := db.ExecContext(ctx, long); err != nil {
 		t.Fatal(err)
@@ -163,6 +176,7 @@ func TestAuditLogsEveryStatement(t *testing.T) {
 		{Event: "commit", OK: true},
 		{Event: "begin", OK: true},
 		{Event: "rollback", OK: true},
+		{Event: "exec", SQL: `INSERTBULK {"TableName":"t"}`, OK: true, Rows: &two},
 		{Event: "exec", SQL: long[:maxAuditSQL-1], OK: true, Rows: &two, Truncated: true}, // cut before the split rune
 	}
 	got := events()

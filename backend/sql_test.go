@@ -141,7 +141,7 @@ func TestDevModeDBIsCachedWithoutTokenSource(t *testing.T) {
 	defer func() { servers, serverNames = nil, nil }()
 	s := &session{dbs: map[string]*sql.DB{}} // ts == nil means dev mode
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // the wake ping must bail before dialing; the handle is still cached
+	cancel() // the ping must bail before dialing; the handle is still cached
 	if _, err := s.db(ctx, "localhost", "master"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("db: want context.Canceled, got %v", err)
 	}
@@ -163,7 +163,7 @@ func TestSessionsKeepTheirOwnPoolsAndTokens(t *testing.T) {
 	ann := &session{Name: "Ann", ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "token-ann"}), dbs: map[string]*sql.DB{}}
 	bob := &session{Name: "Bob", ts: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: "token-bob"}), dbs: map[string]*sql.DB{}}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // the wake ping must bail before dialing; the handles are still cached
+	cancel() // the ping must bail before dialing; the handles are still cached
 	for _, s := range []*session{ann, bob} {
 		if _, err := s.db(ctx, "localhost", "master"); !errors.Is(err, context.Canceled) {
 			t.Fatalf("%s: want context.Canceled, got %v", s.Name, err)
@@ -202,8 +202,9 @@ func (fakeConn) Prepare(string) (driver.Stmt, error) { return nil, errors.New("u
 func (fakeConn) Close() error                        { return nil }
 func (fakeConn) Begin() (driver.Tx, error)           { return nil, errors.New("unused") }
 
-func TestWakeRetriesWhileResuming(t *testing.T) {
-	wakeRetry = time.Millisecond
+// waitDB retries while the database is resuming and gives up at once on anything else.
+func TestWaitDBRetriesWhileResuming(t *testing.T) {
+	waitRetry = time.Millisecond
 	for _, c := range []struct {
 		number    int32
 		wantCalls int
@@ -214,23 +215,30 @@ func TestWakeRetriesWhileResuming(t *testing.T) {
 	} {
 		fc := &fakeConnector{fails: 2, number: c.number}
 		d := sql.OpenDB(fc)
-		err := wake(context.Background(), d)
+		waits := 0
+		_, err := waitDB(context.Background(), func() (*sql.DB, error) {
+			if err := d.PingContext(context.Background()); err != nil {
+				return nil, wrapConnect(err, "db")
+			}
+			return d, nil
+		}, func() { waits++ })
 		d.Close()
-		if (err != nil) != c.wantErr || fc.calls != c.wantCalls {
-			t.Errorf("error %d: err=%v calls=%d, want err=%v calls=%d", c.number, err, fc.calls, c.wantErr, c.wantCalls)
+		if (err != nil) != c.wantErr || fc.calls != c.wantCalls || waits > 1 {
+			t.Errorf("error %d: err=%v calls=%d waits=%d, want err=%v calls=%d", c.number, err, fc.calls, waits, c.wantErr, c.wantCalls)
 		}
 	}
 }
 
-func TestWrapAccess(t *testing.T) {
+func TestWrapConnect(t *testing.T) {
 	var ae *accessError
-	if err := wrapAccess(mssql.Error{Number: 18456}, "master"); !errors.As(err, &ae) {
+	if err := wrapConnect(mssql.Error{Number: 18456}, "master"); !errors.As(err, &ae) {
 		t.Errorf("login failed not wrapped: %v", err)
 	}
-	if err := wrapAccess(mssql.Error{Number: 40613}, "db"); errors.As(err, &ae) {
-		t.Errorf("resuming database wrongly wrapped as no access: %v", err)
+	var re *resumingError
+	if err := wrapConnect(mssql.Error{Number: 40613}, "db"); errors.As(err, &ae) || !errors.As(err, &re) {
+		t.Errorf("resuming database not wrapped as resuming: %v", err)
 	}
-	if err := wrapAccess(errors.New("plain"), "db"); errors.As(err, &ae) {
+	if err := wrapConnect(errors.New("plain"), "db"); errors.As(err, &ae) {
 		t.Errorf("non-SQL error wrongly wrapped: %v", err)
 	}
 }
@@ -244,8 +252,9 @@ func TestFailStatusCodes(t *testing.T) {
 	}{
 		{"not found", errNotFound, 404, ""},
 		{"sql error", mssql.Error{Message: "boom"}, 400, "boom"},
-		{"no access", wrapAccess(mssql.Error{Number: 4060, Message: "Cannot open database"}, "adv"), 403, "you have no access to database"},
+		{"no access", wrapConnect(mssql.Error{Number: 4060, Message: "Cannot open database"}, "adv"), 403, "you have no access to database"},
 		{"token expired", &oauth2.RetrieveError{}, 401, ""},
+		{"resuming", wrapConnect(mssql.Error{Number: 40613}, "app"), 503, `"resuming":true`},
 		{"other", errors.New("x"), 500, ""},
 	}
 	for _, c := range cases {
