@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.6.1 — 2026-09-27
+
+- SECURITY.md: both sequence diagrams render on GitHub again (a `;` inside a mermaid note ended
+  the statement and broke the parse).
+
 ## v0.6.0 — 2026-09-27
 
 - CSV import handles files of millions of rows: the upload returns at once and the import
