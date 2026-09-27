@@ -25,7 +25,7 @@ sequenceDiagram
     S->>E: POST /token: code + client secret
     E-->>S: id_token, refresh_token, access_token
     Note over S: aud = client, tid = tenant, groups contains allowed group, else 403
-    Note over S: session in memory: name, email, token source; ends after 30 min idle or 12 h
+    Note over S: session in memory: name, email, token source, ends after 30 min idle or 12 h
     S-->>B: 302 /, Set-Cookie sid (HttpOnly, Secure, SameSite=Lax)
 ```
 
@@ -48,7 +48,7 @@ sequenceDiagram
     participant E as Entra ID
     participant Q as SQL Server
     B->>S: GET /api/s/{srv}/d/{db}/t/{schema}/{table}/rows, Cookie: sid
-    Note over S: sid resolves to the session; idle 30 min or older than 12 h: 401
+    Note over S: sid resolves to the session, idle 30 min or older than 12 h: 401
     Note over S: pool for srv/db in this session, opened on first use
     opt new connection and the cached access token has expired
         S->>E: refresh_token to token endpoint
